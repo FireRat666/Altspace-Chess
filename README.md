@@ -1,45 +1,21 @@
-# BanterChess
+# Chess
 
-**A serverless, 3D chess game for the Banter platform.**
+A synced multiplayer 3D chess board. Moves are checked with [chess.js](https://github.com/jhlywa/chess.js). Made for **SideQuest / AltspaceVR** worlds, and it also works in **Banter**.
 
-This project provides a fully interactive 3D chess game that can be dropped into any Banter world. It is designed to be **serverless**, meaning it doesn't require any backend infrastructure and can be hosted on any static file host (like GitHub Pages).
+There is no server: players stay in sync through the space's shared state, and the game is plain static files served from <https://chess.firer.at>.
+
+To try it, open <https://chess.firer.at> in Altspace or Banter.
 
 ## Features
-- **3D Chess Board**: A fully interactive 3D chess board rendered directly in your Banter space.
-- **Serverless Real-time Multiplayer**: Game state is synced between players using Banter's public space properties, removing the need for a backend server.
-- **Static Host Ready**: Can be deployed and run from any static web host.
-- **Multiple Games**: Supports multiple, independent chess games in the same Banter space via a simple configuration.
-- **Customizable**: The board's position, rotation, and scale are easily configurable.
 
-## How It Works
-The game operates using a single JavaScript file (`Chess.js`) that you include in your Banter space.
-- **Game Logic**: Core chess rules, move validation, and FEN state management are handled by the powerful `chess.js` library.
-- **3D Rendering**: The board and pieces are created at runtime as `GameObject` instances using the Banter SDK. Piece models are loaded from the `models` directory.
-- **State Synchronization**: There is no server. When a player makes a move, the new game state (in FEN format) is written to Banter's `public` space state. All game clients listen for the `space-state-changed` event and update their boards accordingly, ensuring everyone stays in sync.
+- Full chess rules, with legal move checking
+- Reset button
+- Several independent boards in one world
+- Lit or unlit materials
 
-## Usage
+## Add it to an Altspace world (snippet)
 
-To add the chess board to your Banter world, you simply need to host these files on a static host (like GitHub Pages) and then add a single `<script>` tag to your world's HTML.
-
-**1. Host the Files**
-Upload the contents of this repository to your static hosting provider.
-
-**2. Add to Banter**
-Add the following HTML to your space's configuration, replacing the `src` URL with the path to the `Chess.js` file on your host.
-
-```html
-<!-- 
-  Add this script tag to your Banter world's HTML.
-  Example uses GitHub Pages. Replace `your-github-username` with your username.
--->
-<script src="https://banter-chess.firer.at/Chess.js"></script>
-```
-
-The game will appear at the default position in your world.
-
-## SideQuest / Altspace Creator SDK (Snippet)
-
-In a SideQuest/Altspace Creator SDK world, add an empty GameObject at the origin, click **Add Component > BS > Snippet** and type `chess`. Or paste it into `Assets/WebRoot/index.html` between the snippet section comments:
+In a Creator SDK world, add an empty GameObject at the origin, click **Add Component > BS > Snippet** and type `chess`. Or paste this into `Assets/WebRoot/index.html`, between the snippet section comments:
 
 ```html
 <!-- snippet section -->
@@ -62,50 +38,60 @@ In a SideQuest/Altspace Creator SDK world, add an empty GameObject at the origin
 <!-- end snippet section -->
 ```
 
-- Settings are the same as the script attributes above. `position` and `rotation` are Unity world values, and `scale` can be a single number.
 - Each placement is its own game. Its sync id is `room`, or the placement's own id when `room` is empty. Give placements the same `room` to share one game.
-- An empty setting uses the game's default.
+- `position` and `rotation` are Unity world values, and `scale` can be a single number. The other settings are listed under [Settings](#settings). An empty setting uses the default.
 - The Scene-view gizmo shows the board at its default size; it does not follow `scale`.
 - Unity reads the snippet section as XML: quote every attribute, close every element, and write `&` as `&amp;`.
 
-## Project Structure
-- `index.html`: An example HTML file for loading the game. This can be used to test the game or as a basis for your Banter world's HTML.
-- `Chess.js`: The all-in-one script that contains the game's logic, rendering, and networking code.
-- `models/`: Contains the `.glb` 3D models for the white and black chess pieces.
-- `README.md`: This file.
+## Add it with a script tag
 
-## Configuration
-You can customize the game's appearance and behavior using **HTML script attributes** (recommended) or legacy **URL query parameters** (for backwards compatibility).
-
-**HTML Script Attributes Example:**
-```html
-<script src="https://banter-chess.firer.at/Chess.js" boardPosition="5 1.5 -2" boardScale="0.8" boardRotation="0 30 0"></script>
-```
-
-**Legacy URL Query Parameters Example:**
-```html
-<script src="https://banter-chess.firer.at/Chess.js?boardPosition=5+1.5+-2&boardScale=0.8&boardRotation=0+30+0"></script>
-```
-
-**Multiple Instances (using Attributes):**
-To have multiple, independent chess games in the same space, add a unique `instance` name.
+This works in an Altspace world's `Assets/WebRoot/index.html` (outside the snippet section) and in a Banter space's HTML:
 
 ```html
-<!-- Game in the Lobby -->
-<script src="https://banter-chess.firer.at/Chess.js" instance="lobby_game"></script>
-
-<!-- Game by the Fireside -->
-<script src="https://banter-chess.firer.at/Chess.js" instance="fireside_game" boardPosition="10 1 -5"></script>
+<script src="https://chess.firer.at/Chess.js" position="0 1.1 -2" scale="0.8"></script>
 ```
 
-### All Attributes / Parameters
-- `instance`: A unique ID for the game board. Use this to have multiple separate games in one Banter space. (Default: the page URL)
-- `boardPosition` / `position` / `board-position`: The `x y z` position of the board in the world. (Default: `0 1.1 -2`)
-- `boardRotation` / `rotation` / `board-rotation`: The `x y z` rotation of the board in degrees. (Default: `0 0 0`)
-- `boardScale` / `scale` / `board-scale`: A uniform scale `s` or per-axis `x y z` scale. (Default: `1`)
-- `lighting`: Set to `lit` to use physically-based lit materials that respond to scene lights. (Default: `unlit`)
-- `addLights` / `add-lights`: When `lighting=lit`, this controls whether a default directional light is added. Set to `false` if you have your own lights. (Default: `true`)
-- `hideUI` / `hide-ui`: Set to `true` to hide the Reset button. (Default: `false`)
-- `resetPosition` / `reset-position`: The `x y z` position of the reset button relative to the board. (Default: `0 0 2.5`)
-- `resetRotation` / `reset-rotation`: The `x y z` rotation of the reset button. (Default: `0 0 0`)
-- `resetScale` / `reset-scale`: The `x y z` scale of the reset button. (Default: `1 1 1`)
+For more than one board in a space, give each one its own `instance`:
+
+```html
+<script src="https://chess.firer.at/Chess.js" instance="board1" position="-2 1.1 -2"></script>
+<script src="https://chess.firer.at/Chess.js" instance="board2" position="2 1.1 -2"></script>
+```
+
+Settings can also go in the URL, as in older setups: `https://chess.firer.at/Chess.js?boardPosition=0+1.1+-2&boardScale=0.8`.
+
+## Settings
+
+| Setting | Also accepted | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `instance` |  | page URL | Sync id. Boards with the same id share one game. In a snippet, use `room` instead. |
+| `boardPosition` | `position`, `board-position` | `0 1.1 -2` | Board position (x y z). |
+| `boardRotation` | `rotation`, `board-rotation` | `0 0 0` | Board rotation in degrees (x y z). |
+| `boardScale` | `scale`, `board-scale` | `1` | Board scale: one number, or x y z. |
+| `resetPosition` | `reset-position` | `0 0 2.5` | Reset button position, relative to the board. |
+| `resetRotation` | `reset-rotation` | `0 0 0` | Reset button rotation, relative to the board. |
+| `resetScale` | `reset-scale` | `1` | Reset button scale. |
+| `hideUI` | `hide-ui` | `false` | `true` hides the buttons. |
+| `hideBoard` | `hide-board` | `false` | `true` hides the board, e.g. to use your own. |
+| `lighting` |  | `unlit` | `lit` uses materials that react to scene lights. |
+| `addLights` | `add-lights` | `true` | With `lighting="lit"`, adds a directional light. Set `false` if the world has its own. |
+| `piecesOpacity` | `pieces-opacity` | `1` | Piece opacity, 0 to 1. |
+
+Settings can be written as `boardPosition` or `board-position`; the snippet uses the hyphenated form.
+
+## How to play
+
+1. Click one of your pieces. Its square turns green.
+2. Click the square to move it to.
+3. Pawns that reach the far side become queens.
+
+## Files
+
+- `Chess.js`: the game.
+- `models/White`, `models/Black`: the piece models.
+- `snippet.js`, `snippet.html`: the Creator SDK snippet and its definition.
+- `index.html`: a test page with a floor and the game.
+
+## License
+
+GPL-3.0. See [LICENSE](LICENSE).
