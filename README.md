@@ -37,6 +37,37 @@ Add the following HTML to your space's configuration, replacing the `src` URL wi
 
 The game will appear at the default position in your world.
 
+## SideQuest / Altspace Creator SDK (Snippet)
+
+In a SideQuest/Altspace Creator SDK world, add an empty GameObject at the origin, click **Add Component > BS > Snippet** and type `chess`. Or paste it into `Assets/WebRoot/index.html` between the snippet section comments:
+
+```html
+<!-- snippet section -->
+<bs-snippet name="chess" title="Chess"
+  description="Synced multiplayer chess board with a reset button."
+  script="https://chess.firer.at/snippet.js"
+  room=""
+  position="0 1 2"
+  rotation="0 0 0"
+  scale="0.5"
+  lighting="unlit"
+  add-lights="true"
+  hide-ui="false"
+  hide-board="false"
+  pieces-opacity="1"
+  reset-position="0 0 2.5">
+  <bs-gizmo type="position" attribute="position"/>
+  <bs-gizmo type="box" attribute="position" size="2 0.05 2"/>
+</bs-snippet>
+<!-- end snippet section -->
+```
+
+- Settings are the same as the script attributes above. `position` and `rotation` are Unity world values, and `scale` can be a single number.
+- Each placement is its own game. Its sync id is `room`, or the placement's own id when `room` is empty. Give placements the same `room` to share one game.
+- An empty setting uses the game's default.
+- The Scene-view gizmo shows the board at its default size; it does not follow `scale`.
+- Unity reads the snippet section as XML: quote every attribute, close every element, and write `&` as `&amp;`.
+
 ## Project Structure
 - `index.html`: An example HTML file for loading the game. This can be used to test the game or as a basis for your Banter world's HTML.
 - `Chess.js`: The all-in-one script that contains the game's logic, rendering, and networking code.

@@ -1,4 +1,6 @@
 (function () {
+    // One game per copy of this script, so several boards on a page don't share a game.
+    let chessGame = null;
     /**
      * BanterChess Unified Embed Script
      * Loads dependencies, initializes game logic, and renders the board in Banter.
@@ -350,7 +352,7 @@
             // Optimistically reset for the local user, as the `space-state-changed` event
             // may not fire reliably for the originating client.
             console.log("Optimistically resetting local board.");
-            window.chessGame.reset();
+            chessGame.reset();
             syncBoard();
             clearSelection();
         });
@@ -573,7 +575,7 @@
             trans.localPosition = new BS.Vector3(0, 0, 0);
         }
 
-        const fen = window.chessGame.getFen();
+        const fen = chessGame.getFen();
         const rows = fen.split(' ')[0].split('/');
         const letters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
         const newBoardState = {};
@@ -656,7 +658,7 @@
 
     function setMaterialColor(go, hexColor) {
         if (!go) return;
-        const mat = go.GetComponent(BS.ComponentType.BanterMaterial);
+        const mat = go.GetComponent((BS.ComponentType.Material ?? BS.ComponentType.BanterMaterial));
         if (mat) {
             const newColor = hexToVector4(hexColor);
             // If board is hidden, adjust tile alpha.
@@ -674,7 +676,7 @@
     }
 
     function handleSquareClick(squareId) {
-        const game = window.chessGame;
+        const game = chessGame;
         if (!state.selectedSquare) {
             if (game.chess.get(squareId)) {
                 state.selectedSquare = squareId;
@@ -750,11 +752,11 @@
                         const gameState = JSON.parse(val);
                         console.log("Syncing game state from space:", gameState);
                         if (gameState.fen === 'reset') {
-                            window.chessGame.reset();
+                            chessGame.reset();
                             syncBoard();
                             clearSelection();
                         } else if (gameState.fen) {
-                            window.chessGame.loadFen(gameState.fen);
+                            chessGame.loadFen(gameState.fen);
                             syncBoard();
                         }
                     } catch (err) {
@@ -771,7 +773,7 @@
                 const gameState = JSON.parse(initialVal);
                 console.log("Loaded initial game state:", gameState);
                 if (gameState.fen) {
-                    window.chessGame.loadFen(gameState.fen);
+                    chessGame.loadFen(gameState.fen);
                     syncBoard();
                 }
             } catch (err) {
@@ -791,8 +793,8 @@
 
         await loadDependencies();
         // Initialize Game
-        if (!window.chessGame) {
-            window.chessGame = new ChessGame();
+        if (!chessGame) {
+            chessGame = new ChessGame();
         }
 
         // Convert config arrays to BS.Vector3 now that BS is available
