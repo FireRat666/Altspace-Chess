@@ -566,7 +566,30 @@
         }
     }
 
-    async function syncBoard() {
+    // Redraws can overlap (e.g. loading saved state on join while the first sync event
+    // arrives). Two overlapping redraws both create a piece for the same empty slot and one
+    // gets orphaned, so it is never hidden again (e.g. after a reset). Run one at a time,
+    // and redraw once more if a new one was requested mid-run.
+    let redrawing = null;
+    let redrawAgain = false;
+    function syncBoard() {
+        redrawAgain = true;
+        if (!redrawing) {
+            redrawing = (async () => {
+                try {
+                    while (redrawAgain) {
+                        redrawAgain = false;
+                        await renderBoard();
+                    }
+                } finally {
+                    redrawing = null;
+                }
+            })();
+        }
+        return redrawing;
+    }
+
+    async function renderBoard() {
         console.log("Syncing board...");
         if (!state.piecesRoot) {
             state.piecesRoot = await new BS.GameObject("PiecesContainer").Async();
