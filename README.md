@@ -26,12 +26,15 @@ In a Creator SDK world, add an empty GameObject at the origin, click **Add Compo
   position="0 1 2"
   rotation="0 0 0"
   scale="0.5"
-  lighting="unlit"
-  add-lights="true"
+  lit="true"
+  add-lights="false"
+  turn-cooldown="5"
   hide-ui="false"
   hide-board="false"
   pieces-opacity="1"
-  reset-position="0 0 2.5">
+  reset-position="0 0 2.5"
+  reset-rotation="0 0 0"
+  reset-scale="1">
   <bs-gizmo type="position" attribute="position"/>
   <bs-gizmo type="box" attribute="position" size="2 0.05 2"/>
 </bs-snippet>
@@ -71,10 +74,15 @@ Settings can also go in the URL, as in older setups: `https://chess.firer.at/Che
 | `resetPosition` | `reset-position` | `0 0 2.5` | Reset button position, relative to the board. |
 | `resetRotation` | `reset-rotation` | `0 0 0` | Reset button rotation, relative to the board. |
 | `resetScale` | `reset-scale` | `1` | Reset button scale. |
-| `hideUI` | `hide-ui` | `false` | `true` hides the buttons. |
+| `hideUI` | `hide-ui` | `false` | `true` makes the reset button invisible (it still works and its RESET label stays visible) and hides the turn display. |
+| `scoreboardPosition` | `scoreboard-position` | `0 1.5 0` | Position of the sign showing whose turn it is, relative to the board. |
+| `scoreboardRotation` | `scoreboard-rotation` | `0 0 0` | Turn sign rotation. |
+| `scoreboardScale` | `scoreboard-scale` | `1` | Turn sign scale. |
+| `turnCooldown` | `turn-cooldown` | `5` | Seconds after a move before the same person can move for the other side, so a double click or an eager player can't take the opponent's turn. Playing both sides alone still works after the wait. `0` turns it off. |
 | `hideBoard` | `hide-board` | `false` | `true` hides the board, e.g. to use your own. |
-| `lighting` |  | `unlit` | `lit` uses materials that react to scene lights. |
-| `addLights` | `add-lights` | `true` | With `lighting="lit"`, adds a directional light. Set `false` if the world has its own. |
+| `lit` |  | `true` | Uses materials that react to scene lights. `false` uses unlit materials that ignore lighting. |
+| `lighting` |  | `lit` | Older form of `lit`: `lit` or `unlit`. `lit` wins if both are set. |
+| `addLights` | `add-lights` | `false` | With `lit="true"`, `true` adds a directional light, for worlds that have no lights of their own. |
 | `piecesOpacity` | `pieces-opacity` | `1` | Piece opacity, 0 to 1. |
 
 Settings can be written as `boardPosition` or `board-position`; the snippet uses the hyphenated form.
