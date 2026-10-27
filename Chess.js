@@ -147,6 +147,8 @@
         config.resetPosition = parseVector3(getParam('resetPosition'), config.resetPosition);
         config.resetRotation = parseVector3(getParam('resetRotation'), config.resetRotation);
         config.scoreboardPosition = parseVector3(getParam('scoreboardPosition'), null);
+        // 0 0 0 means automatic (the turn sign's default spot)
+        if (config.scoreboardPosition && config.scoreboardPosition.every(n => n === 0)) config.scoreboardPosition = null;
         config.scoreboardRotation = parseVector3(getParam('scoreboardRotation'), null);
         config.scoreboardScale = parseVector3(getParam('scoreboardScale'), null);
         config.resetScale = parseVector3(getParam('resetScale'), config.resetScale);
