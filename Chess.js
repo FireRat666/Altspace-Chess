@@ -318,6 +318,7 @@
 
         console.log("Board Initialized with Config:", config);
 
+        if (!config.hideBoard) await createBoardFrame();
         await generateTiles();
 
         // Check UI flag to add buttons
@@ -327,6 +328,22 @@
 
         // Networking Setup
         setupBanterStateListeners();
+    }
+
+    // A wooden frame round the squares, a little higher than them.
+    async function createBoardFrame() {
+        const span = state.boardSize * state.tileSize;
+        const rail = 0.18;
+        const edge = span / 2 + rail / 2;
+        const bars = [
+            [0, edge, span + rail * 2, rail], [0, -edge, span + rail * 2, rail],
+            [edge, 0, rail, span], [-edge, 0, rail, span]
+        ];
+        for (let i = 0; i < bars.length; i++) {
+            const [x, z, w, d] = bars[i];
+            await createBanterObject(`Frame_${i}`, state.boardRoot, new BS.Vector3(x, 0.01, z),
+                '#4A2C16', BS.GeometryType.BoxGeometry, { width: w, height: 0.14, depth: d });
+        }
     }
 
     // Puts a text label on a button's face (same approach as Go's buttons). `w` and `h` are the
