@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <!-- WEB PAGE HEAD START -->
+    <meta charset="UTF-8">
+    <meta name="sidequest-space-verification" content="9336d1d5-d2dd-4a43-aa46-23368cb20bdb">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#00ff44">
+    <title>Chess for AltspaceVR &amp; BanterVR | Embed 3D Multiplayer Chess | FireR.at</title>
+    <meta name="description" content="Embed a synced 3D multiplayer Chess board with full legal move checking and a reset button into your AltspaceVR (altvr.app, the new Altspace) world or BanterVR space.">
+    <meta name="keywords" content="Altspace Chess, AltspaceVR Chess, Banter Chess, BanterVR Chess, altvr.app, the new Altspace, VR chess, Altspace snippet chess, FireRat">
+    <meta name="author" content="FireRat">
+    <meta name="robots" content="index, follow">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="FireR.at">
+    <meta property="og:title" content="Chess for AltspaceVR &amp; BanterVR | FireR.at">
+    <meta property="og:description" content="Synced 3D multiplayer Chess board by FireRat for AltspaceVR (altvr.app) and BanterVR worlds.">
+    <meta property="og:url" content="https://chess.firer.at/">
+    <meta property="og:image" content="https://cdn.sidequestvr.com/file/4761160/altspace-photo-20261027-145328-0e0c.jpg">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Chess for AltspaceVR &amp; BanterVR | FireR.at">
+    <meta name="twitter:description" content="Synced 3D multiplayer Chess board by FireRat for AltspaceVR (altvr.app) and BanterVR worlds.">
+    <meta name="twitter:image" content="https://cdn.sidequestvr.com/file/4761160/altspace-photo-20261027-145328-0e0c.jpg">
+    <link rel="canonical" href="https://chess.firer.at/">
+    <link rel="icon" href="https://firer.at/files/favicon.ico" type="image/x-icon">
+    <script type="application/ld+json">
+    {
+      "@context": "https://schema.org",
+      "@type": "VideoGame",
+      "name": "Chess for AltspaceVR & BanterVR",
+      "url": "https://chess.firer.at/",
+      "image": "https://cdn.sidequestvr.com/file/4761160/altspace-photo-20261027-145328-0e0c.jpg",
+      "gamePlatform": ["AltspaceVR", "BanterVR"],
+      "applicationCategory": "GameApplication",
+      "playMode": "MultiPlayer",
+      "description": "Serverless synced 3D multiplayer Chess board with full legal move checking for AltspaceVR (altvr.app) and BanterVR spaces.",
+      "author": { "@type": "Person", "name": "FireRat", "url": "https://firer.at/" },
+      "isPartOf": { "@type": "WebPage", "url": "https://firer.at/games.html" }
+    }
+    </script>
+    <script>
+      // In Altspace or Banter this page is the space itself, so the web page part is hidden.
+      (function () {
+        var hide = function () { document.documentElement.classList.add('in-space'); };
+        if (window.isBanter || window.BS) hide();
+        window.addEventListener('bs-loaded', hide);
+      })();
+    </script>
+    <link rel="stylesheet" href="https://firer.at/pages/nstyle.css">
+    <script src="https://firer.at/scripts/RandomBG.js"></script>
+    <style>
+      .in-space .fire-page, .in-space body::before, .in-space body::after { display: none !important; }
+      .fire-page #guide ul, .fire-page .info-block ul, .fire-page .info-block ol { color: var(--text-secondary); margin: 0 0 1.25rem 1.4rem; }
+      .fire-page li { margin-bottom: 0.4rem; }
+      .fire-page .info-block { margin-bottom: 3rem; }
+      .fire-page pre.diagram { cursor: default; }
+      .fire-page pre.diagram::before { content: none; }
+      .fire-page footer { text-align: center; }
+    </style>
+    <!-- WEB PAGE HEAD END -->
+    <style>
+        .nav-mesh {
+            display: none;
+        }
+    </style>
+</head>
+
+<body>
+<!-- WEB PAGE START: shown in a normal browser, hidden in Altspace and Banter -->
+<div class="fire-page">
+  <div class="ambient-glow-2"></div>
+  <div class="container">
+    <header>
+      <span class="eyebrow">Altspace &amp; Banter game</span>
+      <h1><span class="text-gradient">Chess</span></h1>
+      <p>A synced multiplayer 3D chess board. Moves are checked with <a href="https://github.com/jhlywa/chess.js" target="_blank">chess.js</a>. Made for <strong>SideQuest / AltspaceVR</strong> worlds, and it also works in <strong>Banter</strong>.</p>
+<p>There is no server: players stay in sync through the space's shared state, and the game is plain static files served from <a href="https://chess.firer.at">chess.firer.at</a>.</p>
+    </header>
+
+    <nav>
+      <a href="https://firer.at/games.html" class="buttonG buttonss buttonActive">&larr; All games</a>
+      <a href="https://firer.at/" class="buttonss buttonMain">FireR.at</a>
+      <a href="https://github.com/FireRat666/Banter-Chess" class="buttonW buttonss" target="_blank">GitHub</a>
+      <a href="https://ko-fi.com/FireRat666" class="buttonGY buttonss" target="_blank">Ko-fi</a>
+    </nav>
+
+    <main>
+      <section id="guide">
+        <h2>Add it to an Altspace world</h2>
+                <ul>
+          <li><strong>On the website:</strong> edit your world on <a href="https://altvr.app" target="_blank">altvr.app</a>, open <strong>Snippets</strong> on the left, choose <strong>All</strong>, then pick <strong>Chess</strong>.</li>
+          <li><strong>In Unity:</strong> add an empty GameObject, click <strong>Add Component &gt; BS &gt; Snippet</strong> and type <code>chess</code>.</li>
+        </ul>
+
+        <h2>Add it with a script tag</h2>
+        <p>Paste this into a Banter space's HTML, or into an Altspace world's <code>Assets/WebRoot/index.html</code> (outside the snippet section). Give each copy its own <code>instance</code> to have more than one game in a space.</p>
+        <div class="code-header">Script tag</div>
+        <pre><code>&lt;script src=&quot;https://chess.firer.at/Chess.js&quot; position=&quot;0 1.1 -2&quot; scale=&quot;0.8&quot;&gt;&lt;/script&gt;</code></pre>
+        <p>All the settings are listed on <a href="https://github.com/FireRat666/Banter-Chess#settings" target="_blank">GitHub</a>.</p>
+        <p>A position of <code>0 0 0</code> means automatic: the turn sign sits in its default spot next to the board. Any other value places it relative to the board.</p>
+      </section>
+
+      <section class="info-block">
+        <h2>Features</h2>
+        <ul><li>Full chess rules, with legal move checking</li><li>Reset button</li><li>Several independent boards in one world</li><li>Lit or unlit materials</li></ul>
+      </section>
+
+      <section class="info-block">
+        <h2>How to play</h2>
+        <ol><li>Click one of your pieces. Its square turns green.</li><li>Click the square to move it to.</li><li>Pawns that reach the far side become queens.</li></ol>
+      </section>
+    </main>
+
+    <footer>
+      <p>Synced multiplayer chess board with a reset button. Open <a href="https://chess.firer.at">chess.firer.at</a> as a space in Altspace or Banter to try it.</p>
+      <p>&copy; <span class="fire-year"></span> <a href="https://firer.at/">FireR.at</a></p>
+    </footer>
+  </div>
+  <script>
+    document.querySelectorAll('.fire-year').forEach(el => { el.textContent = new Date().getFullYear(); });
+    document.querySelectorAll('.fire-page pre:not(.diagram)').forEach(pre => {
+      pre.addEventListener('click', async () => {
+        const header = pre.previousElementSibling;
+        try {
+          await navigator.clipboard.writeText(pre.innerText);
+          if (header) { const t = header.textContent; header.textContent = 'Copied!'; setTimeout(() => { header.textContent = t; }, 2000); }
+        } catch (e) { console.error('Copy failed', e); }
+      });
+    });
+  </script>
+</div>
+<!-- WEB PAGE END -->
+    <a-scene></a-scene>
+    <script>
+        // A big sphere round the space with a sky picture on its inside.
+        // Called from createFloor, so it is made once, at the same time as the floor.
+        async function createSky() {
+            const sky = await new BS.GameObject({ name: "BanterSky" }).Async();
+            await sky.AddComponent(new BS.BanterSphere({ radius: 300 }));
+            await sky.AddComponent(new BS.BanterInvertedMesh()); // Faces inwards, so it shows from inside
+            await sky.AddComponent(new BS.BanterMaterial({
+                shaderName: "Unlit/Diffuse",
+                texture: "https://drop.firer.at/Assets/skybox-4k-zc.jpg",
+                color: new BS.Vector4(1, 1, 1, 1),
+                side: BS.MaterialSide.Front
+            }));
+            await sky.AddComponent(new BS.Transform());
+        }
+
+        async function createFloor() {
+            createSky();
+            const floor = await new BS.GameObject("BanterFloor").Async();
+            const width = 30; const height = 0.1; const depth = 30;
+
+            const geoArgs = [BS.GeometryType.BoxGeometry, null, width, height, depth, 1, 1, 1, 0.5, 24, 0, 6.28, 0, 6.28, 8, false, 0.5, 0.5, 0, 1, 24, 8, 0.4, 16, 6.28, 2, 3, 5, 5, 0, ""];
+            await floor.AddComponent(new BS.BanterGeometry(...geoArgs));
+
+            const texUrl = "https://cdn.aframe.io/a-painter/images/floor.jpg";
+            await floor.AddComponent(new BS.BanterMaterial("Unlit/Texture", texUrl, new BS.Vector4(1, 1, 1, 1), BS.MaterialSide.Front, true));
+            await floor.AddComponent(new BS.BoxCollider(false, new BS.Vector3(0, 0, 0), new BS.Vector3(width, height, depth)));
+
+            let transform = floor.GetComponent(BS.ComponentType.Transform);
+            if (!transform) transform = await floor.AddComponent(new BS.Transform());
+            transform.localPosition = new BS.Vector3(0, -0.05, 0); // Flush with 0
+        }
+
+        window.addEventListener("bs-loaded", async () => {
+            createFloor();
+        });
+    </script>
+    <!-- 
+       Chess embed
+       Customize via URL params in the src attribute!
+    -->
+    <!-- snippet section -->
+    <bs-snippet name="chess" title="Chess"
+      description="Synced multiplayer chess board with modern UI, seat locking, and distance culling."
+      script="https://test.firer.at/snippet.js"
+      room=""
+      position="0 0.3 3"
+      rotation="0 0 0"
+      scale="1.5"
+      lit="true"
+      add-lights="false"
+      turn-cooldown="5"
+      cull-distance="20"
+      sound-volume="0.4"
+      sound-near="2.5"
+      sound-far="10"
+      hide-ui="false"
+      hide-board="false"
+      pieces-opacity="1"
+      scoreboard-position="0 0 0"
+      scoreboard-rotation="0 0 0"
+      scoreboard-scale="1">
+      <bs-gizmo type="position" attribute="position"/>
+      <bs-gizmo type="box" attribute="position" size="2 0.05 2"/>
+    </bs-snippet>
+    <!-- end snippet section -->
+</body>
+
+</html>
