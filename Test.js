@@ -16,7 +16,7 @@
         resetScale: [1, 1, 1],
         scoreboardPosition: [0, 0.45, 0],
         scoreboardRotation: [0, 0, 0],
-        scoreboardScale: [0.12, 0.12, 0.12],
+        scoreboardScale: [0.16, 0.16, 0.16],
         instance: window.location.href.split('?')[0], // Default to current URL without query params to avoid mismatches
         hideUI: false,
         turnCooldown: 5, // Seconds before the same person can move for the other side; 0 = off
@@ -323,6 +323,13 @@
         return new BS.Vector4(((num >> 16) & 255) / 255, ((num >> 8) & 255) / 255, (num & 255) / 255, 1);
     }
 
+    function withTimeout(promise, ms, desc) {
+        return Promise.race([
+            promise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${desc || ''}`)), ms))
+        ]);
+    }
+
     const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
 
     const state = {
@@ -454,26 +461,29 @@
         }
         const uiRot = config.scoreboardRotation ? v3(config.scoreboardRotation) : new BS.Vector3(0, 0, 0);
 
-        let rawScale = config.scoreboardScale ? v3(config.scoreboardScale) : new BS.Vector3(0.12, 0.12, 0.12);
+        let rawScale = config.scoreboardScale ? v3(config.scoreboardScale) : new BS.Vector3(0.16, 0.16, 0.16);
         let uiScale;
         if (rawScale.x >= 0.5) {
-            uiScale = new BS.Vector3(0.12 * rawScale.x, 0.12 * rawScale.y, 0.12 * rawScale.z);
+            uiScale = new BS.Vector3(0.16 * rawScale.x, 0.16 * rawScale.y, 0.16 * rawScale.z);
         } else {
             uiScale = rawScale;
         }
 
-        const uiObj = await new BS.GameObject("Chess_CentralUI").Async();
-        await uiObj.SetParent(state.boardRoot, false);
+        const uiObj = await new BS.GameObject({
+            name: "Chess_CentralUI",
+            parent: state.boardRoot,
+            localPosition: uiPos,
+            localEulerAngles: uiRot,
+            localScale: uiScale
+        }).Async();
 
-        let t = await uiObj.AddComponent(new BS.Transform());
-        t.localPosition = uiPos;
-        t.localEulerAngles = uiRot;
-        t.localScale = uiScale;
+        let t = uiObj.GetComponent(BS.ComponentType.Transform);
+        if (!t) t = await uiObj.AddComponent(new BS.Transform());
 
         let billboard = await uiObj.AddComponent(new BS.BanterBillboard({ smoothing: 1, enableXAxis: false, enableYAxis: true }));
         billboard.enableXAxis = false;
 
-        const panel = await uiObj.AddComponent(new BS.BanterUI(new BS.Vector2(520, 200), false));
+        const panel = await uiObj.AddComponent(new BS.BanterUI(new BS.Vector2(650, 270), false));
         const rootEl = panel.CreateVisualElement();
         await rootEl.Async();
 
@@ -483,10 +493,10 @@
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'space-between',
-            paddingTop: '10px',
-            paddingBottom: '10px',
-            paddingLeft: '14px',
-            paddingRight: '14px',
+            paddingTop: '14px',
+            paddingBottom: '14px',
+            paddingLeft: '18px',
+            paddingRight: '18px',
             borderRadius: '16px',
             borderWidth: '3px',
             borderColor: 'rgba(80, 95, 125, 0.85)',
@@ -515,10 +525,10 @@
         title.text = "CHESS";
         title.SetStyles({
             color: '#f0f0f0',
-            fontSize: '22px',
+            fontSize: '26px',
             fontWeight: 'bold',
             backgroundColor: 'rgba(0,0,0,0)',
-            marginRight: '8px'
+            marginRight: '10px'
         });
 
         const statusLabel = panel.CreateLabel(undefined, headerRow);
@@ -526,7 +536,7 @@
         statusLabel.text = turnStatusText();
         statusLabel.SetStyles({
             color: '#ffcc00',
-            fontSize: '20px',
+            fontSize: '24px',
             fontWeight: 'bold',
             textAlign: 'center',
             flexGrow: '1',
@@ -542,12 +552,12 @@
         muteBtn.SetStyles({
             backgroundColor: '#37474f',
             color: 'white',
-            fontSize: '18px',
+            fontSize: '20px',
             paddingTop: '6px',
             paddingBottom: '6px',
-            paddingLeft: '12px',
-            paddingRight: '12px',
-            borderRadius: '6px',
+            paddingLeft: '14px',
+            paddingRight: '14px',
+            borderRadius: '8px',
             borderWidth: '0px',
             backgroundImage: 'none'
         });
@@ -567,7 +577,8 @@
             alignItems: 'center',
             justifyContent: 'space-between',
             width: '100%',
-            marginBottom: '4px',
+            marginTop: '6px',
+            marginBottom: '6px',
             backgroundColor: 'rgba(0,0,0,0)'
         });
 
@@ -581,19 +592,19 @@
             btn.SetStyles({
                 backgroundColor: color,
                 color: textColor || 'white',
-                fontSize: '16px',
+                fontSize: '20px',
                 fontWeight: 'bold',
-                paddingTop: '8px',
-                paddingBottom: '8px',
-                paddingLeft: '12px',
-                paddingRight: '12px',
+                paddingTop: '10px',
+                paddingBottom: '10px',
+                paddingLeft: '14px',
+                paddingRight: '14px',
                 borderRadius: '8px',
                 borderWidth: '2px',
                 borderColor: '#666666',
                 backgroundImage: 'none',
                 flexGrow: '1',
-                marginRight: '4px',
-                marginLeft: '4px'
+                marginRight: '6px',
+                marginLeft: '6px'
             });
             if (typeof btn.OnClick === 'function') btn.OnClick(handler);
             else if (typeof btn.On === 'function') btn.On('click', handler);
@@ -619,20 +630,20 @@
         if (resetBtn.parent && resetBtn.parent.SetStyles) {
             resetBtn.parent.SetStyles({ backgroundColor: 'rgba(0,0,0,0)', backgroundImage: 'none' });
         }
-        resetBtn.text = "RESET";
+        resetBtn.text = "RESET GAME";
         resetBtn.SetStyles({
             backgroundColor: '#c62828',
             color: 'white',
-            fontSize: '16px',
+            fontSize: '18px',
             fontWeight: 'bold',
-            paddingTop: '6px',
-            paddingBottom: '6px',
-            paddingLeft: '18px',
-            paddingRight: '18px',
-            borderRadius: '6px',
+            paddingTop: '8px',
+            paddingBottom: '8px',
+            paddingLeft: '22px',
+            paddingRight: '22px',
+            borderRadius: '8px',
             borderWidth: '0px',
             backgroundImage: 'none',
-            marginRight: '10px'
+            marginRight: '12px'
         });
         const handleResetAction = () => handleResetClick();
         if (typeof resetBtn.OnClick === 'function') resetBtn.OnClick(handleResetAction);
@@ -644,10 +655,10 @@
         noticeLabel.text = "";
         noticeLabel.SetStyles({
             color: '#ff7043',
-            fontSize: '14px',
+            fontSize: '15px',
             textAlign: 'left',
             flexGrow: '1',
-            minHeight: '18px',
+            minHeight: '20px',
             backgroundColor: 'rgba(0,0,0,0)'
         });
 
@@ -1119,39 +1130,53 @@
                 return null;
             }
 
-            const piece = await new BS.GameObject({
-                name: `Piece_${char}_${squareId}_${Math.random().toString(36).substr(2, 5)}`,
-                parent: parent,
-                localPosition: getPiecePos(squareId, char),
-                localEulerAngles: new BS.Vector3(0, isWhite ? 180 : 0, 0),
-                localScale: new BS.Vector3(1, 1, 1)
-            }).Async();
+            const piece = await withTimeout(
+                new BS.GameObject({
+                    name: `Piece_${char}_${squareId}_${Math.random().toString(36).substr(2, 5)}`,
+                    parent: parent,
+                    localPosition: getPiecePos(squareId, char),
+                    localEulerAngles: new BS.Vector3(0, isWhite ? 180 : 0, 0),
+                    localScale: new BS.Vector3(1, 1, 1)
+                }).Async(),
+                5000,
+                `GameObject ${char} on ${squareId}`
+            );
 
             const folder = isWhite ? 'White' : 'Black';
             const url = getModelUrl(`${folder}/${modelName}`);
             console.log(`Loading GLB from: ${url}`);
 
             try {
-                await piece.AddComponent(new BS.BanterGLTF(url, false, false, false, false, false, false));
+                await withTimeout(
+                    piece.AddComponent(new BS.BanterGLTF(url, false, false, false, false, false, false)),
+                    5000,
+                    `BanterGLTF ${char} on ${squareId}`
+                );
 
-                if (config.lighting === 'lit') {
-                    const colorHex = isWhite ? COLORS.whitePiece : COLORS.blackPiece;
-                    const colorVec4 = hexToVector4(colorHex);
-                    await piece.AddComponent(new BS.BanterMaterial("Standard", "", colorVec4, BS.MaterialSide.Front, false));
-                } else {
+                // Only add custom material if unlit or custom opacity is requested;
+                // standard GLTF PBR textures/materials are already embedded inside White/ and Black/ GLBs
+                if (config.lighting !== 'lit' || config.piecesOpacity < 1.0) {
                     const colorHex = isWhite ? COLORS.whitePiece : COLORS.blackPiece;
                     const colorVec4 = hexToVector4(colorHex);
                     colorVec4.w = config.piecesOpacity;
                     const isTransparent = config.piecesOpacity < 1.0;
                     const shader = isTransparent ? 'Unlit/DiffuseTransparent' : 'Unlit/Diffuse';
-                    await piece.AddComponent(new BS.BanterMaterial(shader, isTransparent ? null : '', colorVec4, BS.MaterialSide.Front, false));
+                    await withTimeout(
+                        piece.AddComponent(new BS.BanterMaterial(shader, isTransparent ? null : '', colorVec4, BS.MaterialSide.Front, false)),
+                        4000,
+                        `BanterMaterial ${char} on ${squareId}`
+                    );
                 }
             } catch (glbErr) {
                 console.error(`Failed to load GLTF for ${char}:`, glbErr);
             }
 
             // Collider for click - Stays on the main piece object for correct click handling
-            await piece.AddComponent(new BS.BoxCollider(true, new BS.Vector3(0, 0.15, 0), new BS.Vector3(0.2, 0.15, 0.2)));
+            await withTimeout(
+                piece.AddComponent(new BS.BoxCollider(true, new BS.Vector3(0, 0.15, 0), new BS.Vector3(0.2, 0.15, 0.2))),
+                4000,
+                `BoxCollider ${char} on ${squareId}`
+            );
             await piece.SetLayer(5); // UI layer
 
             piece.On('click', () => {
@@ -1256,24 +1281,31 @@
                 }
             }
 
-            // 4. PASS 2: Fill gaps (moved pieces or new promotions)
-            for (let i = 0; i < pendingSquares.length; i++) {
-                const { sq, char } = pendingSquares[i];
-                renderStatus = `creating ${char} at ${sq} (${i + 1}/${pendingSquares.length})`;
-                let piece = null;
+            // 4. PASS 2: Match available moved pieces or schedule concurrent creation
+            const piecesToCreate = [];
+            for (const { sq, char } of pendingSquares) {
                 if (availablePieces[char] && availablePieces[char].length > 0) {
-                    // Reuse a piece that moved from somewhere else
-                    piece = availablePieces[char].pop();
+                    const piece = availablePieces[char].pop();
                     const trans = piece.GetComponent(BS.ComponentType.Transform);
-                    // FIX: Use getPiecePos so moved pieces keep their Y-offset
                     if (trans) trans.localPosition = getPiecePos(sq, char);
-                } else {
-                    // Determine creation parent (piecesRoot)
-                    piece = await createPiece(char, sq, state.piecesRoot);
-                }
-
-                if (piece) {
                     nextPiecesMap[sq] = piece;
+                } else {
+                    piecesToCreate.push({ sq, char });
+                }
+            }
+
+            if (piecesToCreate.length > 0) {
+                renderStatus = `creating ${piecesToCreate.length} pieces concurrently`;
+                const createdResults = await Promise.all(
+                    piecesToCreate.map(async ({ sq, char }) => {
+                        const piece = await createPiece(char, sq, state.piecesRoot);
+                        return { sq, piece };
+                    })
+                );
+                for (const { sq, piece } of createdResults) {
+                    if (piece) {
+                        nextPiecesMap[sq] = piece;
+                    }
                 }
             }
 
