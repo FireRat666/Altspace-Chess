@@ -49,8 +49,13 @@
     };
 
     // Parse URL params or script attributes from this script tag immediately
-    const currentScript = document.currentScript;
-    const scriptSrc = currentScript ? currentScript.src : null;
+    // If document.currentScript is null (e.g. dynamically appended or async execution),
+    // find the script tag in the document referencing Test.js or Chess.js.
+    const currentScript = document.currentScript || (() => {
+        const scripts = Array.from(document.querySelectorAll('script'));
+        return scripts.find(s => s.src && (/Test\.js/i.test(s.src) || /Chess\.js/i.test(s.src))) || null;
+    })();
+    const scriptSrc = currentScript ? currentScript.src : (typeof location !== 'undefined' ? location.href : null);
 
     if (currentScript) {
         const getParam = (name, defaultValue) => {
@@ -652,12 +657,24 @@
 
         updateModernUI();
 
-        // Periodic presence and timeout refresher (every 2.5 seconds)
-        setInterval(() => {
-            if (!isCulled && state.ui) {
-                updateModernUI();
-            }
-        }, 2500);
+        // Slow periodic idle timeout and presence refresher (starts only after scene loads)
+        const startIdleRefresher = () => {
+            setInterval(() => {
+                if (!isCulled && state.ui) {
+                    updateModernUI();
+                }
+            }, 10000);
+        };
+
+        const sceneInst = BS.BanterScene.GetInstance();
+        if (window.__banterLoadedHref || (sceneInst && sceneInst.sceneLoaded)) {
+            startIdleRefresher();
+        } else if (sceneInst && typeof sceneInst.OneShot === 'function') {
+            sceneInst.OneShot('scene-loaded', () => setTimeout(startIdleRefresher, 1000));
+        } else {
+            window.addEventListener('scene-loaded', () => setTimeout(startIdleRefresher, 1000), { once: true });
+            setTimeout(startIdleRefresher, 5000);
+        }
     }
 
     function updateModernUI() {
@@ -883,8 +900,20 @@
     let cullingInterval = null;
 
     function setupDistanceCulling() {
-        if (cullingInterval) clearInterval(cullingInterval);
-        cullingInterval = setInterval(updateCulling, 500);
+        if (config.cullDistance <= 0) return;
+        const start = () => {
+            if (cullingInterval) clearInterval(cullingInterval);
+            cullingInterval = setInterval(updateCulling, 1000);
+        };
+        const scene = BS.BanterScene.GetInstance();
+        if (window.__banterLoadedHref || (scene && scene.sceneLoaded)) {
+            start();
+        } else if (scene && typeof scene.OneShot === 'function') {
+            scene.OneShot('scene-loaded', () => setTimeout(start, 1000));
+        } else {
+            window.addEventListener('scene-loaded', () => setTimeout(start, 1000), { once: true });
+            setTimeout(start, 5000);
+        }
     }
 
     function updateCulling() {
