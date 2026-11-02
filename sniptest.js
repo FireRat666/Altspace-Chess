@@ -33,7 +33,7 @@
     const room = (el.getAttribute('room') || el.getAttribute('instance') || '').trim();
     if (room) script.setAttribute('instance', room);
     script.addEventListener('error', () => console.error(`${LOG}: failed to load ${script.src}`));
-    script.src = new URL(GAME_SCRIPT, new URL(base, location.href)).href;
+    script.src = new URL(`${GAME_SCRIPT}?v=${Date.now()}`, new URL(base, location.href)).href;
     document.body.appendChild(script);
   };
 
