@@ -14,12 +14,13 @@
         resetPosition: [0, 0, 2.5],
         resetRotation: [0, 0, 0],
         resetScale: [1, 1, 1],
-        scoreboardPosition: [0, 1.4, 0],
+        scoreboardPosition: [0, 0.45, 0],
         scoreboardRotation: [0, 0, 0],
-        scoreboardScale: [0.15, 0.15, 0.15],
+        scoreboardScale: [0.12, 0.12, 0.12],
         instance: window.location.href.split('?')[0], // Default to current URL without query params to avoid mismatches
         hideUI: false,
         turnCooldown: 5, // Seconds before the same person can move for the other side; 0 = off
+        lockTimeout: 90, // Inactivity timeout in seconds before an idle player's seat unlocks (0 = off)
         cullDistance: 20, // Metres beyond which the game objects are disabled/hidden for performance; 0 = off
         volume: 0.4, // Sound effect volume, 0-1; 0 = no sounds
         soundNear: 2.5, // Metres from the game where sounds are at full volume
@@ -107,6 +108,7 @@
                 useAOBaking: ['use-ao-baking'],
                 boardSize: ['board-size'],
                 piecesOpacity: ['pieces-opacity'],
+                lockTimeout: ['lock-timeout', 'seat-timeout', 'idle-timeout'],
                 cullDistance: ['cull-distance', 'renderDistance', 'render-distance', 'cull-dist'],
                 scoreboardPosition: ['scoreboard-position', 'ui-position', 'panel-position'],
                 scoreboardRotation: ['scoreboard-rotation', 'ui-rotation', 'panel-rotation'],
@@ -169,6 +171,8 @@
 
         config.cullDistance = parseFloat(getParam('cullDistance', String(config.cullDistance)));
         if (isNaN(config.cullDistance)) config.cullDistance = 20;
+        config.lockTimeout = parseFloat(getParam('lockTimeout', String(config.lockTimeout)));
+        if (isNaN(config.lockTimeout)) config.lockTimeout = 90;
 
         // Store as arrays for now
         config.boardScale = parseVector3(getParam('boardScale'), config.boardScale);
@@ -179,7 +183,7 @@
         config.resetRotation = parseVector3(getParam('resetRotation'), config.resetRotation);
         config.scoreboardPosition = parseVector3(getParam('scoreboardPosition'), config.scoreboardPosition);
         // 0 0 0 means automatic (the panel's default spot)
-        if (config.scoreboardPosition && config.scoreboardPosition.every(n => n === 0)) config.scoreboardPosition = [0, 1.4, 0];
+        if (config.scoreboardPosition && config.scoreboardPosition.every(n => n === 0)) config.scoreboardPosition = [0, 0.45, 0];
         config.scoreboardRotation = parseVector3(getParam('scoreboardRotation'), config.scoreboardRotation);
         config.scoreboardScale = parseVector3(getParam('scoreboardScale'), config.scoreboardScale);
         config.resetScale = parseVector3(getParam('resetScale'), config.resetScale);
@@ -318,7 +322,7 @@
 
     const state = {
         tiles: {}, pieces: {}, selectedSquare: null,
-        boardRoot: null, piecesRoot: null,
+        boardRoot: null, boardVisuals: null, piecesRoot: null,
         listenersSetup: false, tileSize: 0.5, boardSize: 8, offset: 0,
         ui: null,
         gameState: null,
@@ -335,8 +339,25 @@
         const scene = BS.BanterScene.GetInstance();
         if (!scene || !scene.localUser) return false;
         if (scene.space && scene.space.owner && String(scene.space.owner.uid) === String(scene.localUser.uid)) return true;
-        const uids = Object.keys(scene.users || {});
+        if (scene.space && (scene.space.isHost || scene.space.isOwner)) return true;
+        const uids = Object.keys(scene.users || {}).sort();
         return uids.length > 0 && String(uids[0]) === String(scene.localUser.uid);
+    }
+
+    function isPlayerPresent(uid) {
+        if (!uid) return false;
+        const scene = BS.BanterScene.GetInstance();
+        if (!scene) return false;
+        if (scene.localUser && String(scene.localUser.uid) === String(uid)) return true;
+        if (scene.users && scene.users[uid]) return true;
+        return false;
+    }
+
+    function isSeatIdle(player) {
+        if (!player || !config.lockTimeout || config.lockTimeout <= 0) return false;
+        const lastAction = state.gameState?.lastActionTime;
+        if (!lastAction) return false;
+        return (Date.now() - lastAction) > (config.lockTimeout * 1000);
     }
 
     function saveState(boardState) {
@@ -365,10 +386,19 @@
         rootTrans.localEulerAngles = config.boardRotation; // Apply Rotation
         rootTrans.localScale = config.boardScale;         // Apply Scale
 
+        // Visuals container for 3D board geometry (frame, tiles, pieces, lights)
+        // Can be toggled safely via SetActive(!culled) without breaking BanterUI
+        state.boardVisuals = await new BS.GameObject("ChessBoardVisuals");
+        await state.boardVisuals.SetParent(state.boardRoot, false);
+        let visTrans = await state.boardVisuals.AddComponent(new BS.Transform());
+        visTrans.localPosition = new BS.Vector3(0, 0, 0);
+        visTrans.localEulerAngles = new BS.Vector3(0, 0, 0);
+        visTrans.localScale = new BS.Vector3(1, 1, 1);
+
         // Add lights if we are using a lit shader and the user has not disabled them.
         if (config.lighting === 'lit' && config.addLights) {
             const lightGO = await new BS.GameObject("BanterChess_DirectionalLight");
-            await lightGO.SetParent(state.boardRoot, false);
+            await lightGO.SetParent(state.boardVisuals, false);
             let lightTrans = await lightGO.AddComponent(new BS.Transform());
             lightTrans.localPosition = new BS.Vector3(0, 5, -5); // Above and behind the board from white's perspective
             lightTrans.localEulerAngles = new BS.Vector3(45, 0, 0); // Angled down
@@ -403,7 +433,7 @@
         ];
         for (let i = 0; i < bars.length; i++) {
             const [x, z, w, d] = bars[i];
-            await createBanterObject(`Frame_${i}`, state.boardRoot, new BS.Vector3(x, 0.01, z),
+            await createBanterObject(`Frame_${i}`, state.boardVisuals, new BS.Vector3(x, 0.01, z),
                 '#4A2C16', BS.GeometryType.BoxGeometry, { width: w, height: 0.14, depth: d });
         }
     }
@@ -413,9 +443,9 @@
         if (config.hideUI) return;
 
         const v3 = a => Array.isArray(a) ? new BS.Vector3(...a) : a;
-        const uiPos = config.scoreboardPosition ? v3(config.scoreboardPosition) : new BS.Vector3(0, 1.4, 0);
+        const uiPos = config.scoreboardPosition ? v3(config.scoreboardPosition) : new BS.Vector3(0, 0.45, 0);
         const uiRot = config.scoreboardRotation ? v3(config.scoreboardRotation) : new BS.Vector3(0, 0, 0);
-        const uiScale = config.scoreboardScale ? v3(config.scoreboardScale) : new BS.Vector3(0.15, 0.15, 0.15);
+        const uiScale = config.scoreboardScale ? v3(config.scoreboardScale) : new BS.Vector3(0.12, 0.12, 0.12);
 
         const uiObj = await new BS.GameObject("Chess_CentralUI").Async();
         await uiObj.SetParent(state.boardRoot, false);
@@ -428,23 +458,23 @@
         let billboard = await uiObj.AddComponent(new BS.BanterBillboard({ smoothing: 1, enableXAxis: false, enableYAxis: true }));
         billboard.enableXAxis = false;
 
-        const panel = await uiObj.AddComponent(new BS.BanterUI(new BS.Vector2(850, 480), false));
+        const panel = await uiObj.AddComponent(new BS.BanterUI(new BS.Vector2(520, 200), false));
         const rootEl = panel.CreateVisualElement();
         await rootEl.Async();
 
         rootEl.SetStyles({
-            backgroundColor: 'rgba(12, 14, 20, 0.92)',
+            backgroundColor: 'rgba(15, 18, 26, 0.94)',
             display: 'flex',
             flexDirection: 'column',
             alignItems: 'center',
             justifyContent: 'space-between',
-            paddingTop: '20px',
-            paddingBottom: '20px',
-            paddingLeft: '24px',
-            paddingRight: '24px',
-            borderRadius: '25px',
-            borderWidth: '4px',
-            borderColor: 'rgba(74, 78, 105, 1)',
+            paddingTop: '10px',
+            paddingBottom: '10px',
+            paddingLeft: '14px',
+            paddingRight: '14px',
+            borderRadius: '16px',
+            borderWidth: '3px',
+            borderColor: 'rgba(80, 95, 125, 0.85)',
             width: '100%',
             height: '100%'
         });
@@ -453,43 +483,80 @@
             rootEl.parent.SetStyles({ backgroundColor: 'rgba(0, 0, 0, 0)' });
         }
 
-        // Title
-        const title = panel.CreateLabel(undefined, rootEl);
-        await title.Async();
-        title.text = "CHESS";
-        title.SetStyles({
-            color: 'white',
-            fontSize: '40px',
-            fontWeight: 'bold',
+        // Header Row: Title, Turn Status, Mute Button
+        const headerRow = panel.CreateVisualElement(rootEl);
+        await headerRow.Async();
+        headerRow.SetStyles({
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            width: '100%',
             marginBottom: '4px',
             backgroundColor: 'rgba(0,0,0,0)'
         });
 
-        // Status / Turn Indicator
-        const statusLabel = panel.CreateLabel(undefined, rootEl);
+        const title = panel.CreateLabel(undefined, headerRow);
+        await title.Async();
+        title.text = "CHESS";
+        title.SetStyles({
+            color: '#f0f0f0',
+            fontSize: '22px',
+            fontWeight: 'bold',
+            backgroundColor: 'rgba(0,0,0,0)',
+            marginRight: '8px'
+        });
+
+        const statusLabel = panel.CreateLabel(undefined, headerRow);
         await statusLabel.Async();
         statusLabel.text = turnStatusText();
         statusLabel.SetStyles({
             color: '#ffcc00',
-            fontSize: '26px',
+            fontSize: '20px',
             fontWeight: 'bold',
-            marginBottom: '8px',
             textAlign: 'center',
+            flexGrow: '1',
             backgroundColor: 'rgba(0,0,0,0)'
         });
 
-        // Seats Row
+        const muteBtn = panel.CreateButton(headerRow);
+        await muteBtn.Async();
+        if (muteBtn.parent && muteBtn.parent.SetStyles) {
+            muteBtn.parent.SetStyles({ backgroundColor: 'rgba(0,0,0,0)', backgroundImage: 'none' });
+        }
+        muteBtn.text = sounds.muted ? "🔇" : "🔊";
+        muteBtn.SetStyles({
+            backgroundColor: '#37474f',
+            color: 'white',
+            fontSize: '18px',
+            paddingTop: '6px',
+            paddingBottom: '6px',
+            paddingLeft: '12px',
+            paddingRight: '12px',
+            borderRadius: '6px',
+            borderWidth: '0px',
+            backgroundImage: 'none'
+        });
+        const handleMuteToggle = () => {
+            sounds.muted = !sounds.muted;
+            try { localStorage.setItem(MUTE_KEY, sounds.muted ? '1' : '0'); } catch (e) {}
+            muteBtn.text = sounds.muted ? "🔇" : "🔊";
+        };
+        if (typeof muteBtn.OnClick === 'function') muteBtn.OnClick(handleMuteToggle);
+        else if (typeof muteBtn.On === 'function') muteBtn.On('click', handleMuteToggle);
+
+        // Seats Row: White & Black Player Seats
         const seatsRow = panel.CreateVisualElement(rootEl);
         await seatsRow.Async();
         seatsRow.SetStyles({
             flexDirection: 'row',
             alignItems: 'center',
-            justifyContent: 'center',
-            marginBottom: '8px',
+            justifyContent: 'space-between',
+            width: '100%',
+            marginBottom: '4px',
             backgroundColor: 'rgba(0,0,0,0)'
         });
 
-        const createBtn = async (parent, text, color, textColor, handler, extraStyles = {}) => {
+        const createSeatBtn = async (parent, text, color, textColor, handler) => {
             const btn = panel.CreateButton(parent);
             await btn.Async();
             if (btn.parent && btn.parent.SetStyles) {
@@ -499,72 +566,73 @@
             btn.SetStyles({
                 backgroundColor: color,
                 color: textColor || 'white',
-                fontSize: '20px',
+                fontSize: '16px',
                 fontWeight: 'bold',
-                paddingTop: '10px',
-                paddingBottom: '10px',
-                paddingLeft: '18px',
-                paddingRight: '18px',
+                paddingTop: '8px',
+                paddingBottom: '8px',
+                paddingLeft: '12px',
+                paddingRight: '12px',
                 borderRadius: '8px',
-                margin: '6px',
                 borderWidth: '2px',
                 borderColor: '#666666',
                 backgroundImage: 'none',
-                ...extraStyles
+                flexGrow: '1',
+                marginRight: '4px',
+                marginLeft: '4px'
             });
-            if (typeof btn.OnClick === 'function') {
-                btn.OnClick(handler);
-            } else if (typeof btn.On === 'function') {
-                btn.On('click', handler);
-            }
+            if (typeof btn.OnClick === 'function') btn.OnClick(handler);
+            else if (typeof btn.On === 'function') btn.On('click', handler);
             return btn;
         };
 
-        const whiteSeatBtn = await createBtn(seatsRow, "WHITE: [CLAIM]", '#ffffff', '#111111', () => handleWhiteSeatClick());
-        const blackSeatBtn = await createBtn(seatsRow, "BLACK: [CLAIM]", '#262626', '#ffffff', () => handleBlackSeatClick());
+        const whiteSeatBtn = await createSeatBtn(seatsRow, "WHITE: [CLAIM]", '#ffffff', '#111111', () => handleWhiteSeatClick());
+        const blackSeatBtn = await createSeatBtn(seatsRow, "BLACK: [CLAIM]", '#262626', '#ffffff', () => handleBlackSeatClick());
 
-        // Actions Row
+        // Actions Row: Reset Button & Notice Label
         const actionsRow = panel.CreateVisualElement(rootEl);
         await actionsRow.Async();
         actionsRow.SetStyles({
             flexDirection: 'row',
             alignItems: 'center',
-            justifyContent: 'center',
-            marginBottom: '6px',
+            justifyContent: 'space-between',
+            width: '100%',
             backgroundColor: 'rgba(0,0,0,0)'
         });
 
-        const resetBtn = await createBtn(actionsRow, "RESET", '#d32f2f', 'white', () => handleResetClick(), {
-            fontSize: '22px',
-            paddingTop: '12px',
-            paddingBottom: '12px',
-            paddingLeft: '28px',
-            paddingRight: '28px',
-            borderWidth: '0px'
+        const resetBtn = panel.CreateButton(actionsRow);
+        await resetBtn.Async();
+        if (resetBtn.parent && resetBtn.parent.SetStyles) {
+            resetBtn.parent.SetStyles({ backgroundColor: 'rgba(0,0,0,0)', backgroundImage: 'none' });
+        }
+        resetBtn.text = "RESET";
+        resetBtn.SetStyles({
+            backgroundColor: '#c62828',
+            color: 'white',
+            fontSize: '16px',
+            fontWeight: 'bold',
+            paddingTop: '6px',
+            paddingBottom: '6px',
+            paddingLeft: '18px',
+            paddingRight: '18px',
+            borderRadius: '6px',
+            borderWidth: '0px',
+            backgroundImage: 'none',
+            marginRight: '10px'
         });
-
-        const muteBtn = await createBtn(actionsRow, sounds.muted ? "🔇" : "🔊", '#607D8B', 'white', () => {
-            sounds.muted = !sounds.muted;
-            try { localStorage.setItem(MUTE_KEY, sounds.muted ? '1' : '0'); } catch (e) {}
-            muteBtn.text = sounds.muted ? "🔇" : "🔊";
-        }, {
-            fontSize: '22px',
-            paddingTop: '12px',
-            paddingBottom: '12px',
-            paddingLeft: '22px',
-            paddingRight: '22px',
-            borderWidth: '0px'
-        });
+        const handleResetAction = () => handleResetClick();
+        if (typeof resetBtn.OnClick === 'function') resetBtn.OnClick(handleResetAction);
+        else if (typeof resetBtn.On === 'function') resetBtn.On('click', handleResetAction);
 
         // Notice / Feedback Label
-        const noticeLabel = panel.CreateLabel(undefined, rootEl);
+        const noticeLabel = panel.CreateLabel(undefined, actionsRow);
         await noticeLabel.Async();
         noticeLabel.text = "";
         noticeLabel.SetStyles({
-            color: '#ff5252',
-            fontSize: '18px',
-            textAlign: 'center',
-            minHeight: '22px',
+            color: '#ff7043',
+            fontSize: '14px',
+            textAlign: 'left',
+            flexGrow: '1',
+            minHeight: '18px',
             backgroundColor: 'rgba(0,0,0,0)'
         });
 
@@ -577,10 +645,19 @@
             blackSeatBtn,
             resetBtn,
             muteBtn,
-            noticeLabel
+            noticeLabel,
+            savedPos: uiPos,
+            savedScale: uiScale
         };
 
         updateModernUI();
+
+        // Periodic presence and timeout refresher (every 2.5 seconds)
+        setInterval(() => {
+            if (!isCulled && state.ui) {
+                updateModernUI();
+            }
+        }, 2500);
     }
 
     function updateModernUI() {
@@ -595,6 +672,9 @@
         const currentTurn = chessGame ? chessGame.chess.turn() : 'w';
 
         if (state.ui.whiteSeatBtn) {
+            const whitePresent = white ? isPlayerPresent(white.uid) : false;
+            const whiteIdle = white ? isSeatIdle(white) : false;
+
             if (!white) {
                 state.ui.whiteSeatBtn.text = "WHITE: [CLAIM]";
                 state.ui.whiteSeatBtn.SetStyles({
@@ -609,12 +689,28 @@
                     backgroundColor: '#e8f5e9',
                     color: '#111111',
                     borderColor: currentTurn === 'w' ? '#4CAF50' : '#2e7d32',
-                    borderWidth: currentTurn === 'w' ? '4px' : '2px'
+                    borderWidth: currentTurn === 'w' ? '3px' : '2px'
+                });
+            } else if (!whitePresent) {
+                state.ui.whiteSeatBtn.text = "WHITE: Disconnected [RECLAIM]";
+                state.ui.whiteSeatBtn.SetStyles({
+                    backgroundColor: '#ffebee',
+                    color: '#c62828',
+                    borderColor: '#e57373',
+                    borderWidth: '2px'
+                });
+            } else if (whiteIdle && currentTurn === 'w') {
+                state.ui.whiteSeatBtn.text = `WHITE: ${white.name} (Idle) [RECLAIM]`;
+                state.ui.whiteSeatBtn.SetStyles({
+                    backgroundColor: '#fff8e1',
+                    color: '#f57f17',
+                    borderColor: '#ffb300',
+                    borderWidth: '2px'
                 });
             } else {
                 state.ui.whiteSeatBtn.text = `WHITE: ${white.name}`;
                 state.ui.whiteSeatBtn.SetStyles({
-                    backgroundColor: '#dddddd',
+                    backgroundColor: '#eeeeee',
                     color: '#333333',
                     borderColor: currentTurn === 'w' ? '#4CAF50' : '#888888',
                     borderWidth: currentTurn === 'w' ? '3px' : '2px'
@@ -623,6 +719,9 @@
         }
 
         if (state.ui.blackSeatBtn) {
+            const blackPresent = black ? isPlayerPresent(black.uid) : false;
+            const blackIdle = black ? isSeatIdle(black) : false;
+
             if (!black) {
                 state.ui.blackSeatBtn.text = "BLACK: [CLAIM]";
                 state.ui.blackSeatBtn.SetStyles({
@@ -637,7 +736,23 @@
                     backgroundColor: '#1b3820',
                     color: '#ffffff',
                     borderColor: currentTurn === 'b' ? '#4CAF50' : '#2e7d32',
-                    borderWidth: currentTurn === 'b' ? '4px' : '2px'
+                    borderWidth: currentTurn === 'b' ? '3px' : '2px'
+                });
+            } else if (!blackPresent) {
+                state.ui.blackSeatBtn.text = "BLACK: Disconnected [RECLAIM]";
+                state.ui.blackSeatBtn.SetStyles({
+                    backgroundColor: '#3e2723',
+                    color: '#ffab91',
+                    borderColor: '#e57373',
+                    borderWidth: '2px'
+                });
+            } else if (blackIdle && currentTurn === 'b') {
+                state.ui.blackSeatBtn.text = `BLACK: ${black.name} (Idle) [RECLAIM]`;
+                state.ui.blackSeatBtn.SetStyles({
+                    backgroundColor: '#3e2723',
+                    color: '#ffe082',
+                    borderColor: '#ffb300',
+                    borderWidth: '2px'
                 });
             } else {
                 state.ui.blackSeatBtn.text = `BLACK: ${black.name}`;
@@ -665,7 +780,10 @@
         const black = state.gameState?.blackPlayer;
         const localUidStr = String(local.uid);
 
-        if (!white) {
+        const whitePresent = white ? isPlayerPresent(white.uid) : false;
+        const whiteIdle = white ? isSeatIdle(white) : false;
+
+        if (!white || !whitePresent || whiteIdle) {
             const newBlack = (black && String(black.uid) === localUidStr) ? null : black;
             updateSeats({ uid: localUidStr, name: local.name || "Player" }, newBlack);
             showTurnNotice("You claimed White");
@@ -687,7 +805,10 @@
         const black = state.gameState?.blackPlayer;
         const localUidStr = String(local.uid);
 
-        if (!black) {
+        const blackPresent = black ? isPlayerPresent(black.uid) : false;
+        const blackIdle = black ? isSeatIdle(black) : false;
+
+        if (!black || !blackPresent || blackIdle) {
             const newWhite = (white && String(white.uid) === localUidStr) ? null : white;
             updateSeats(newWhite, { uid: localUidStr, name: local.name || "Player" });
             showTurnNotice("You claimed Black");
@@ -706,7 +827,8 @@
             ...currentData,
             fen: currentData.fen || fen,
             whitePlayer: whitePlayer || null,
-            blackPlayer: blackPlayer || null
+            blackPlayer: blackPlayer || null,
+            lastActionTime: Date.now()
         };
         saveState(newState);
         updateModernUI();
@@ -717,15 +839,23 @@
         const white = state.gameState?.whitePlayer;
         const black = state.gameState?.blackPlayer;
         const isGameActive = chessGame && chessGame.getFen() !== STARTING_FEN;
+        const isGameOver = chessGame && (chessGame.chess.isCheckmate() || chessGame.chess.isDraw());
         const isSeatClaimed = !!(white || black);
 
-        if (isSeatClaimed && isGameActive) {
+        if (isSeatClaimed && isGameActive && !isGameOver) {
             const localUidStr = local && local.uid !== undefined ? String(local.uid) : null;
             const isWhite = white && String(white.uid) === localUidStr;
             const isBlack = black && String(black.uid) === localUidStr;
             const isHost = isSpaceHost();
-            if (!isWhite && !isBlack && !isHost) {
-                showTurnNotice("Only seated players or host can reset!");
+            const whitePresent = white ? isPlayerPresent(white.uid) : true;
+            const blackPresent = black ? isPlayerPresent(black.uid) : true;
+            const whiteIdle = white ? isSeatIdle(white) : false;
+            const blackIdle = black ? isSeatIdle(black) : false;
+
+            const hasAbandonedSeat = (!whitePresent || whiteIdle || !blackPresent || blackIdle);
+
+            if (!isWhite && !isBlack && !isHost && !hasAbandonedSeat) {
+                showTurnNotice("Only seated players or host can reset an active game!");
                 return;
             }
         }
@@ -735,7 +865,8 @@
         const boardState = {
             ...currentData,
             fen: 'reset',
-            lastMove: null
+            lastMove: null,
+            lastActionTime: Date.now()
         };
         saveState(boardState);
 
@@ -779,12 +910,29 @@
         isCulled = culled;
         if (!state.boardRoot) return;
 
-        try {
-            if (typeof state.boardRoot.SetActive === 'function') {
-                state.boardRoot.SetActive(!culled);
+        // 1. Safely toggle 3D board geometry (frame, tiles, pieces, lights)
+        if (state.boardVisuals && typeof state.boardVisuals.SetActive === 'function') {
+            try {
+                state.boardVisuals.SetActive(!culled);
+            } catch (e) {
+                console.warn("Chess: Could not set active state on boardVisuals", e);
             }
-        } catch (e) {
-            console.warn("Chess: Could not set active state on boardRoot", e);
+        }
+
+        // 2. Hide/show BanterUI via position, scale & display to avoid breaking VisualTree
+        if (state.ui && state.ui.obj) {
+            try {
+                const tr = state.ui.obj.GetComponent(BS.ComponentType.Transform);
+                if (tr) {
+                    tr.localPosition = culled ? new BS.Vector3(0, -9999, 0) : state.ui.savedPos;
+                    tr.localScale = culled ? new BS.Vector3(0.0001, 0.0001, 0.0001) : state.ui.savedScale;
+                }
+                if (state.ui.rootEl && typeof state.ui.rootEl.SetStyles === 'function') {
+                    state.ui.rootEl.SetStyles({ display: culled ? 'none' : 'flex' });
+                }
+            } catch (e) {
+                console.warn("Chess: Could not update UI culling state", e);
+            }
         }
 
         if (!culled) {
@@ -864,7 +1012,7 @@
                 const xPos = (x * size) - state.offset;
                 const zPos = -((rank - 1) * size) + state.offset;
 
-                const tile = await createBanterObject(`Tile_${squareId}`, state.boardRoot, new BS.Vector3(xPos, 0, zPos),
+                const tile = await createBanterObject(`Tile_${squareId}`, state.boardVisuals, new BS.Vector3(xPos, 0, zPos),
                     isWhite ? COLORS.white : COLORS.black, BS.GeometryType.BoxGeometry, { width: 0.5, height: 0.1, depth: 0.5 });
 
                 tile.On('click', () => handleSquareClick(squareId));
@@ -1035,7 +1183,7 @@
         console.log("Syncing board...");
         if (!state.piecesRoot) {
             state.piecesRoot = await new BS.GameObject("PiecesContainer").Async();
-            await state.piecesRoot.SetParent(state.boardRoot, false);
+            await state.piecesRoot.SetParent(state.boardVisuals, false);
             let trans = await state.piecesRoot.AddComponent(new BS.Transform());
             trans.localPosition = new BS.Vector3(0, 0, 0);
         }
@@ -1430,14 +1578,29 @@
         const white = state.gameState?.whitePlayer;
         const black = state.gameState?.blackPlayer;
 
-        // Seat check: if a seat is claimed, only the seated player can move for that side
+        // Seat check: if a seat is claimed, only the seated player can move for that side.
+        // If the player disconnected or is idle (>90s), allow another player to take over.
         if (side === 'w' && white) {
-            if (!localUidStr || String(white.uid) !== localUidStr) {
+            const whitePresent = isPlayerPresent(white.uid);
+            const whiteIdle = isSeatIdle(white);
+            if (!whitePresent || whiteIdle) {
+                if (localUidStr && String(white.uid) !== localUidStr) {
+                    showTurnNotice(`White is ${!whitePresent ? 'disconnected' : 'idle'} — claimed seat`);
+                    updateSeats({ uid: localUidStr, name: local ? (local.name || "Player") : "Player" }, black);
+                }
+            } else if (!localUidStr || String(white.uid) !== localUidStr) {
                 showTurnNotice(`It is ${white.name}'s turn (White)`);
                 return;
             }
         } else if (side === 'b' && black) {
-            if (!localUidStr || String(black.uid) !== localUidStr) {
+            const blackPresent = isPlayerPresent(black.uid);
+            const blackIdle = isSeatIdle(black);
+            if (!blackPresent || blackIdle) {
+                if (localUidStr && String(black.uid) !== localUidStr) {
+                    showTurnNotice(`Black is ${!blackPresent ? 'disconnected' : 'idle'} — claimed seat`);
+                    updateSeats(white, { uid: localUidStr, name: local ? (local.name || "Player") : "Player" });
+                }
+            } else if (!localUidStr || String(black.uid) !== localUidStr) {
                 showTurnNotice(`It is ${black.name}'s turn (Black)`);
                 return;
             }
@@ -1464,7 +1627,8 @@
             const currentData = state.lastSpaceState || {};
             const boardState = stampMove({
                 ...currentData,
-                fen: fen
+                fen: fen,
+                lastActionTime: Date.now()
             }, side);
             saveState(boardState);
 
