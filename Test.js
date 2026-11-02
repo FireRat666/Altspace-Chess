@@ -55,7 +55,7 @@
         const scripts = Array.from(document.querySelectorAll('script'));
         return scripts.find(s => s.src && (/Test\.js/i.test(s.src) || /Chess\.js/i.test(s.src))) || null;
     })();
-    const scriptSrc = currentScript ? currentScript.src : (typeof location !== 'undefined' ? location.href : null);
+    const scriptSrc = currentScript ? currentScript.src : 'https://chess.firer.at/Test.js';
 
     if (currentScript) {
         const getParam = (name, defaultValue) => {
@@ -414,17 +414,17 @@
 
         console.log("Board Initialized with Config:", config);
 
-        if (!config.hideBoard) await createBoardFrame();
-        await generateTiles();
-
         // Modern UI Panel replaces old 3D box reset/turn buttons
         await buildModernUI();
+
+        if (!config.hideBoard) await createBoardFrame();
+        await generateTiles();
 
         // Performance proximity culling
         setupDistanceCulling();
 
-        // Networking Setup
-        setupBanterStateListeners();
+        // Networking Setup & Initial Board Sync
+        await setupBanterStateListeners();
     }
 
     // A wooden frame round the squares, a little higher than them.
@@ -448,9 +448,19 @@
         if (config.hideUI) return;
 
         const v3 = a => Array.isArray(a) ? new BS.Vector3(...a) : a;
-        const uiPos = config.scoreboardPosition ? v3(config.scoreboardPosition) : new BS.Vector3(0, 0.45, 0);
+        let uiPos = config.scoreboardPosition ? v3(config.scoreboardPosition) : new BS.Vector3(0, 0.45, 0);
+        if (!uiPos || (uiPos.x === 0 && uiPos.y === 0 && uiPos.z === 0)) {
+            uiPos = new BS.Vector3(0, 0.45, 0);
+        }
         const uiRot = config.scoreboardRotation ? v3(config.scoreboardRotation) : new BS.Vector3(0, 0, 0);
-        const uiScale = config.scoreboardScale ? v3(config.scoreboardScale) : new BS.Vector3(0.12, 0.12, 0.12);
+
+        let rawScale = config.scoreboardScale ? v3(config.scoreboardScale) : new BS.Vector3(0.12, 0.12, 0.12);
+        let uiScale;
+        if (rawScale.x >= 0.5) {
+            uiScale = new BS.Vector3(0.12 * rawScale.x, 0.12 * rawScale.y, 0.12 * rawScale.z);
+        } else {
+            uiScale = rawScale;
+        }
 
         const uiObj = await new BS.GameObject("Chess_CentralUI").Async();
         await uiObj.SetParent(state.boardRoot, false);
@@ -643,6 +653,7 @@
 
         state.ui = {
             obj: uiObj,
+            transform: t,
             panel,
             rootEl,
             statusLabel,
@@ -948,12 +959,11 @@
             }
         }
 
-        // 2. Hide/show BanterUI via position, scale & display to avoid breaking VisualTree
+        // 2. Hide/show BanterUI via scale & display to avoid breaking VisualTree or Billboard
         if (state.ui && state.ui.obj) {
             try {
-                const tr = state.ui.obj.GetComponent(BS.ComponentType.Transform);
+                const tr = state.ui.transform || state.ui.obj.GetComponent(BS.ComponentType.Transform);
                 if (tr) {
-                    tr.localPosition = culled ? new BS.Vector3(0, -9999, 0) : state.ui.savedPos;
                     tr.localScale = culled ? new BS.Vector3(0.0001, 0.0001, 0.0001) : state.ui.savedScale;
                 }
                 if (state.ui.rootEl && typeof state.ui.rootEl.SetStyles === 'function') {
@@ -976,13 +986,11 @@
     async function createTurnBoard() {}
 
     async function createBanterObject(name, parent, posLocal, colorHex, geometryType, dims) {
-        const obj = await new BS.GameObject(name).Async();
-        // FIX: SetParent with false to reset local scale relative to parent
-        await obj.SetParent(parent, false);
-
-        let transform = obj.GetComponent(BS.ComponentType.Transform);
-        if (!transform) transform = await obj.AddComponent(new BS.Transform());
-        transform.localPosition = posLocal;
+        const obj = await new BS.GameObject({
+            name: name,
+            parent: parent,
+            localPosition: posLocal
+        }).Async();
 
         const geoArgs = getGeometryArgs(geometryType, dims);
         await obj.AddComponent(new BS.BanterGeometry(...geoArgs));
@@ -1051,8 +1059,6 @@
                 setMaterialColor(tile, isWhite ? COLORS.white : COLORS.black);
             }
         }
-        // Initial Sync
-        await syncBoard();
     }
 
     const PIECE_MODELS = {
@@ -1099,7 +1105,7 @@
             }
         } catch (e) { console.error("Error resolving model URL:", e); }
         // Fallback if script tag parsing failed
-        return `models/${modelName}`;
+        return `https://chess.firer.at/models/${modelName}`;
     }
 
     async function createPiece(char, squareId, parent) {
@@ -1113,53 +1119,32 @@
                 return null;
             }
 
-            const piece = await new BS.GameObject(`Piece_${type}_${Math.random().toString(36).substr(2, 5)}`).Async();
-            await piece.SetParent(parent, false);
+            const piece = await new BS.GameObject({
+                name: `Piece_${char}_${squareId}_${Math.random().toString(36).substr(2, 5)}`,
+                parent: parent,
+                localPosition: getPiecePos(squareId, char),
+                localEulerAngles: new BS.Vector3(0, isWhite ? 180 : 0, 0),
+                localScale: new BS.Vector3(1, 1, 1)
+            }).Async();
 
-            let transform = piece.GetComponent(BS.ComponentType.Transform);
-            if (!transform) transform = await piece.AddComponent(new BS.Transform());
-
-            // USE HELPER for position - a piece's position is its square
-            transform.localPosition = getPiecePos(squareId, char);
-            transform.localScale = new BS.Vector3(1, 1, 1);
-
-            // The piece's root object should not be rotated.
-            // Create a child "model" object to contain the GLTF and its rotation.
-            const model = await new BS.GameObject(`Model_${type}`).Async();
-            await model.SetParent(piece, false);
-
-            let modelTransform = await model.AddComponent(new BS.Transform());
-            modelTransform.localEulerAngles = new BS.Vector3(0, isWhite ? 180 : 0, 0);
-            modelTransform.localScale = new BS.Vector3(1, 1, 1);
-
-            // CHANGED: Use subfolders for White/Black models
             const folder = isWhite ? 'White' : 'Black';
             const url = getModelUrl(`${folder}/${modelName}`);
             console.log(`Loading GLB from: ${url}`);
 
             try {
-                // Attach GLTF to the model sub-object
-                await model.AddComponent(new BS.BanterGLTF(url, false, false, false, false, false, false));
+                await piece.AddComponent(new BS.BanterGLTF(url, false, false, false, false, false, false));
 
-                // If using lit lighting, add a standard material to override the GLTF's unlit one.
                 if (config.lighting === 'lit') {
                     const colorHex = isWhite ? COLORS.whitePiece : COLORS.blackPiece;
                     const colorVec4 = hexToVector4(colorHex);
-                    // This is a speculative change. It assumes adding a new BanterMaterial will
-                    // override the material of the loaded GLTF. The "Standard" shader is also a guess.
-                    await model.AddComponent(new BS.BanterMaterial("Standard", "", colorVec4, BS.MaterialSide.Front, false));
+                    await piece.AddComponent(new BS.BanterMaterial("Standard", "", colorVec4, BS.MaterialSide.Front, false));
                 } else {
-                    // For unlit, we'll apply our own material to control color and transparency.
                     const colorHex = isWhite ? COLORS.whitePiece : COLORS.blackPiece;
                     const colorVec4 = hexToVector4(colorHex);
-                    colorVec4.w = config.piecesOpacity; // Set alpha
-
+                    colorVec4.w = config.piecesOpacity;
                     const isTransparent = config.piecesOpacity < 1.0;
-                    // Use the transparent shader and texture if opacity is less than 1
                     const shader = isTransparent ? 'Unlit/DiffuseTransparent' : 'Unlit/Diffuse';
-                    const texture = isTransparent ? null : '';
-                    
-                    await model.AddComponent(new BS.BanterMaterial(shader, texture, colorVec4, BS.MaterialSide.Front, false));
+                    await piece.AddComponent(new BS.BanterMaterial(shader, isTransparent ? null : '', colorVec4, BS.MaterialSide.Front, false));
                 }
             } catch (glbErr) {
                 console.error(`Failed to load GLTF for ${char}:`, glbErr);
@@ -1189,6 +1174,8 @@
     // and redraw once more if a new one was requested mid-run.
     let redrawing = null;
     let redrawAgain = false;
+    let renderStatus = "idle";
+    let lastRenderError = null;
     function syncBoard() {
         soundForState();
         redrawAgain = true;
@@ -1210,92 +1197,102 @@
 
     async function renderBoard() {
         console.log("Syncing board...");
-        if (!state.piecesRoot) {
-            state.piecesRoot = await new BS.GameObject("PiecesContainer").Async();
-            await state.piecesRoot.SetParent(state.boardVisuals, false);
-            let trans = await state.piecesRoot.AddComponent(new BS.Transform());
-            trans.localPosition = new BS.Vector3(0, 0, 0);
-        }
-
-        const fen = chessGame.getFen();
-        const rows = fen.split(' ')[0].split('/');
-        const letters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-        const newBoardState = {};
-
-        // 1. Map current board state based on FEN
-        rows.forEach((row, rowIndex) => {
-            const rank = 8 - rowIndex;
-            let fileIndex = 0;
-            for (let char of row) {
-                if (parseInt(char)) fileIndex += parseInt(char);
-                else {
-                    newBoardState[`${letters[fileIndex]}${rank}`] = char;
-                    fileIndex++;
-                }
+        try {
+            renderStatus = "starting renderBoard";
+            if (!state.piecesRoot) {
+                state.piecesRoot = await new BS.GameObject("PiecesContainer").Async();
+                await state.piecesRoot.SetParent(state.boardVisuals, false);
+                let trans = await state.piecesRoot.AddComponent(new BS.Transform());
+                trans.localPosition = new BS.Vector3(0, 0, 0);
             }
-        });
 
-        // 2. Prepare pool of available pieces from current state
-        const availablePieces = {}; // char -> [GameObject]
-        if (state.pieces) {
-            Object.values(state.pieces).forEach(p => {
-                const type = p.pieceType;
-                if (!availablePieces[type]) availablePieces[type] = [];
-                availablePieces[type].push(p);
+            const fen = chessGame.getFen();
+            const rows = fen.split(' ')[0].split('/');
+            const letters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+            const newBoardState = {};
+
+            // 1. Map current board state based on FEN
+            rows.forEach((row, rowIndex) => {
+                const rank = 8 - rowIndex;
+                let fileIndex = 0;
+                for (let char of row) {
+                    if (parseInt(char)) fileIndex += parseInt(char);
+                    else {
+                        newBoardState[`${letters[fileIndex]}${rank}`] = char;
+                        fileIndex++;
+                    }
+                }
             });
-        }
 
-        const nextPiecesMap = {};
-        const pendingSquares = [];
+            // 2. Prepare pool of available pieces from current state
+            const availablePieces = {}; // char -> [GameObject]
+            if (state.pieces) {
+                Object.values(state.pieces).forEach(p => {
+                    const type = p.pieceType;
+                    if (!availablePieces[type]) availablePieces[type] = [];
+                    availablePieces[type].push(p);
+                });
+            }
 
-        // 3. PASS 1: Keep pieces in place if possible
-        for (const [sq, char] of Object.entries(newBoardState)) {
-            const existingPieceOnSquare = state.pieces ? state.pieces[sq] : null;
-            if (existingPieceOnSquare && existingPieceOnSquare.pieceType === char) {
-                // Exact match in place - LOCK IT
-                nextPiecesMap[sq] = existingPieceOnSquare;
+            const nextPiecesMap = {};
+            const pendingSquares = [];
 
-                // Remove from pool so it can't be stolen
-                const list = availablePieces[char];
-                if (list) {
-                    const idx = list.indexOf(existingPieceOnSquare);
-                    if (idx > -1) list.splice(idx, 1);
+            // 3. PASS 1: Keep pieces in place if possible
+            for (const [sq, char] of Object.entries(newBoardState)) {
+                const existingPieceOnSquare = state.pieces ? state.pieces[sq] : null;
+                if (existingPieceOnSquare && existingPieceOnSquare.pieceType === char) {
+                    // Exact match in place - LOCK IT
+                    nextPiecesMap[sq] = existingPieceOnSquare;
+
+                    // Remove from pool so it can't be stolen
+                    const list = availablePieces[char];
+                    if (list) {
+                        const idx = list.indexOf(existingPieceOnSquare);
+                        if (idx > -1) list.splice(idx, 1);
+                    }
+                } else {
+                    // Needs a piece, try to resolve in Pass 2
+                    pendingSquares.push({ sq, char });
                 }
-            } else {
-                // Needs a piece, try to resolve in Pass 2
-                pendingSquares.push({ sq, char });
             }
+
+            // 4. PASS 2: Fill gaps (moved pieces or new promotions)
+            for (let i = 0; i < pendingSquares.length; i++) {
+                const { sq, char } = pendingSquares[i];
+                renderStatus = `creating ${char} at ${sq} (${i + 1}/${pendingSquares.length})`;
+                let piece = null;
+                if (availablePieces[char] && availablePieces[char].length > 0) {
+                    // Reuse a piece that moved from somewhere else
+                    piece = availablePieces[char].pop();
+                    const trans = piece.GetComponent(BS.ComponentType.Transform);
+                    // FIX: Use getPiecePos so moved pieces keep their Y-offset
+                    if (trans) trans.localPosition = getPiecePos(sq, char);
+                } else {
+                    // Determine creation parent (piecesRoot)
+                    piece = await createPiece(char, sq, state.piecesRoot);
+                }
+
+                if (piece) {
+                    nextPiecesMap[sq] = piece;
+                }
+            }
+
+            // 5. Destroy unused pieces (captured)
+            for (const list of Object.values(availablePieces)) {
+                for (const p of list) {
+                    p.Destroy();
+                }
+            }
+
+            // 6. Update State
+            state.pieces = nextPiecesMap;
+            renderStatus = `complete (${Object.keys(nextPiecesMap).length} pieces)`;
+            console.log("Board sync complete.");
+        } catch (e) {
+            lastRenderError = e.message + " | " + (e.stack || "");
+            renderStatus = "error: " + e.message;
+            console.error("renderBoard error:", e);
         }
-
-        // 4. PASS 2: Fill gaps (moved pieces or new promotions)
-        for (const { sq, char } of pendingSquares) {
-            let piece = null;
-            if (availablePieces[char] && availablePieces[char].length > 0) {
-                // Reuse a piece that moved from somewhere else
-                piece = availablePieces[char].pop();
-                const trans = piece.GetComponent(BS.ComponentType.Transform);
-                // FIX: Use getPiecePos so moved pieces keep their Y-offset
-                if (trans) trans.localPosition = getPiecePos(sq, char);
-            } else {
-                // Determine creation parent (piecesRoot)
-                piece = await createPiece(char, sq, state.piecesRoot);
-            }
-
-            if (piece) {
-                nextPiecesMap[sq] = piece;
-            }
-        }
-
-        // 5. Destroy unused pieces (captured)
-        for (const list of Object.values(availablePieces)) {
-            for (const p of list) {
-                p.Destroy();
-            }
-        }
-
-        // 6. Update State
-        state.pieces = nextPiecesMap;
-        console.log("Board sync complete.");
     }
 
     function setMaterialColor(go, hexColor) {
@@ -1769,14 +1766,16 @@
                 state.lastSpaceState = gameState;
                 loadLastMove(gameState);
                 console.log("Loaded initial game state:", gameState);
-                if (gameState.fen && gameState.fen !== 'reset') {
+                if (gameState.fen === 'reset') {
+                    chessGame.reset();
+                } else if (gameState.fen) {
                     chessGame.loadFen(gameState.fen);
-                    syncBoard();
                 }
             } catch (err) {
                 console.error("Error parsing initial game state:", err);
             }
         }
+        await syncBoard();
         updateModernUI();
         startSounds();
         
@@ -1811,6 +1810,24 @@
         // Host spaces should provide their own ground/environment.
         await initializeBoard();
     };
+
+    window.__chessDebug = () => ({
+        fen: chessGame ? chessGame.getFen() : null,
+        piecesCount: state.pieces ? Object.keys(state.pieces).length : 0,
+        piecesKeys: state.pieces ? Object.keys(state.pieces) : null,
+        tilesCount: state.tiles ? Object.keys(state.tiles).length : 0,
+        renderStatus,
+        lastRenderError,
+        piecesRoot: !!state.piecesRoot,
+        boardRoot: !!state.boardRoot,
+        listenersSetup: state.listenersSetup,
+        hasUI: !!(state.ui && state.ui.obj),
+        uiPos: state.ui ? state.ui.savedPos : null,
+        uiScale: state.ui ? state.ui.savedScale : null,
+        isCulled: isCulled,
+        whitePlayer: state.gameState?.whitePlayer,
+        blackPlayer: state.gameState?.blackPlayer
+    });
 
     // --- Check for BS availability ---
     if (window.BS) {
