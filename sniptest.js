@@ -14,7 +14,7 @@
 // - Empty settings are left off, so the game's own default applies.
 (() => {
   const SNIPPET_NAME = 'chess';
-  const GAME_SCRIPT = 'Chess.js';
+  const GAME_SCRIPT = 'Test.js';
   const LOG = 'Chess (snippet)';
   // Attributes that describe the snippet itself rather than the game.
   const NOT_SETTINGS = new Set(['name', 'title', 'description', 'script', 'asset', 'single', 'instance', 'room']);
