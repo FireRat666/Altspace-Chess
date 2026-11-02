@@ -11,18 +11,17 @@
         boardPosition: [0, 1.1, -2],
         boardRotation: [0, 0, 0],
         boardScale: [1, 1, 1],
-        resetPosition: [0, 0, 2.5],
-        resetRotation: [0, 0, 0],
-        resetScale: [1, 1, 1],
+        scoreboardPosition: [0, 1, 0], // UI panel, relative to the board centre
+        scoreboardRotation: [0, 0, 0],
+        scoreboardScale: [1, 1, 1], // 1 = normal size, 2 = twice as big
         instance: window.location.href.split('?')[0], // Default to current URL without query params to avoid mismatches
         hideUI: false,
         turnCooldown: 5, // Seconds before the same person can move for the other side; 0 = off
+        lockTimeout: 90, // Inactivity timeout in seconds before an idle player's seat unlocks (0 = off)
+        cullDistance: 20, // Metres beyond which the game objects are disabled/hidden for performance; 0 = off
         volume: 0.4, // Sound effect volume, 0-1; 0 = no sounds
         soundNear: 2.5, // Metres from the game where sounds are at full volume
         soundFar: 10, // Metres from the game where sounds fade out completely
-        mutePosition: null, // null (0 0 0) = automatic: beside the Reset button
-        muteRotation: [0, 0, 0],
-        muteScale: [1, 1, 1],
         hideBoard: false,
         piecesOpacity: 1.0,
         lighting: 'lit',
@@ -44,8 +43,13 @@
     };
 
     // Parse URL params or script attributes from this script tag immediately
-    const currentScript = document.currentScript;
-    const scriptSrc = currentScript ? currentScript.src : null;
+    // If document.currentScript is null (e.g. dynamically appended or async execution),
+    // find the script tag in the document referencing Test.js or Chess.js.
+    const currentScript = document.currentScript || (() => {
+        const scripts = Array.from(document.querySelectorAll('script'));
+        return scripts.find(s => s.src && (/Test\.js/i.test(s.src) || /Chess\.js/i.test(s.src))) || null;
+    })();
+    const scriptSrc = currentScript ? currentScript.src : 'https://chess.firer.at/Chess.js';
 
     if (currentScript) {
         const getParam = (name, defaultValue) => {
@@ -94,24 +98,17 @@
                 volume: ['sound-volume'],
                 soundNear: ['sound-near'],
                 soundFar: ['sound-far'],
-                mutePosition: ['mute-position'],
-                muteRotation: ['mute-rotation'],
-                muteScale: ['mute-scale'],
                 hideBoard: ['hide-board'],
                 useCustomModels: ['use-custom-models'],
                 addLights: ['add-lights'],
                 useAOBaking: ['use-ao-baking'],
                 boardSize: ['board-size'],
                 piecesOpacity: ['pieces-opacity'],
-                scoreboardPosition: ['scoreboard-position'],
-                scoreboardRotation: ['scoreboard-rotation'],
-                scoreboardScale: ['scoreboard-scale'],
-                resetPosition: ['reset-position'],
-                resetRotation: ['reset-rotation'],
-                resetScale: ['reset-scale'],
-                passPosition: ['pass-position'],
-                passRotation: ['pass-rotation'],
-                passScale: ['pass-scale']
+                lockTimeout: ['lock-timeout', 'seat-timeout', 'idle-timeout'],
+                cullDistance: ['cull-distance', 'renderDistance', 'render-distance', 'cull-dist'],
+                scoreboardPosition: ['scoreboard-position', 'ui-position', 'panel-position'],
+                scoreboardRotation: ['scoreboard-rotation', 'ui-rotation', 'panel-rotation'],
+                scoreboardScale: ['scoreboard-scale', 'ui-scale', 'panel-scale']
             };
 
             if (aliases[name]) {
@@ -142,11 +139,6 @@
         if (isNaN(config.soundNear)) config.soundNear = 2.5;
         config.soundFar = parseFloat(getParam('soundFar', String(config.soundFar)));
         if (isNaN(config.soundFar)) config.soundFar = 10;
-        // 0 0 0 means automatic (beside the Reset button)
-        config.mutePosition = parseVector3(getParam('mutePosition'), null);
-        if (config.mutePosition && config.mutePosition.every(n => n === 0)) config.mutePosition = null;
-        config.muteRotation = parseVector3(getParam('muteRotation'), config.muteRotation);
-        config.muteScale = parseVector3(getParam('muteScale'), config.muteScale);
         config.instance = getParam('instance', config.instance);
         config.lighting = getParam('lighting', config.lighting);
         // 'lit' is a true/false switch (a checkbox in the snippet editor); it overrides 'lighting'.
@@ -162,19 +154,21 @@
             }
         }
 
+        config.cullDistance = parseFloat(getParam('cullDistance', String(config.cullDistance)));
+        if (isNaN(config.cullDistance)) config.cullDistance = 20;
+        config.lockTimeout = parseFloat(getParam('lockTimeout', String(config.lockTimeout)));
+        if (isNaN(config.lockTimeout)) config.lockTimeout = 90;
+
         // Store as arrays for now
         config.boardScale = parseVector3(getParam('boardScale'), config.boardScale);
         config.boardPosition = parseVector3(getParam('boardPosition'), config.boardPosition);
         config.boardRotation = parseVector3(getParam('boardRotation'), config.boardRotation);
 
-        config.resetPosition = parseVector3(getParam('resetPosition'), config.resetPosition);
-        config.resetRotation = parseVector3(getParam('resetRotation'), config.resetRotation);
-        config.scoreboardPosition = parseVector3(getParam('scoreboardPosition'), null);
-        // 0 0 0 means automatic (the turn sign's default spot)
-        if (config.scoreboardPosition && config.scoreboardPosition.every(n => n === 0)) config.scoreboardPosition = null;
-        config.scoreboardRotation = parseVector3(getParam('scoreboardRotation'), null);
-        config.scoreboardScale = parseVector3(getParam('scoreboardScale'), null);
-        config.resetScale = parseVector3(getParam('resetScale'), config.resetScale);
+        config.scoreboardPosition = parseVector3(getParam('scoreboardPosition'), config.scoreboardPosition);
+        // 0 0 0 means automatic (the panel's default spot)
+        if (config.scoreboardPosition && config.scoreboardPosition.every(n => n === 0)) config.scoreboardPosition = [0, 1, 0];
+        config.scoreboardRotation = parseVector3(getParam('scoreboardRotation'), config.scoreboardRotation);
+        config.scoreboardScale = parseVector3(getParam('scoreboardScale'), config.scoreboardScale);
     }
 
     // --- Dependency Loading ---
@@ -306,12 +300,69 @@
         return new BS.Vector4(((num >> 16) & 255) / 255, ((num >> 8) & 255) / 255, (num & 255) / 255, 1);
     }
 
+    function withTimeout(promise, ms, desc) {
+        return Promise.race([
+            promise,
+            new Promise((_, reject) => setTimeout(() => reject(new Error(`Timeout after ${ms}ms: ${desc || ''}`)), ms))
+        ]);
+    }
+
+    const STARTING_FEN = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
     const state = {
         tiles: {}, pieces: {}, selectedSquare: null,
-        boardRoot: null, piecesRoot: null,
-        listenersSetup: false, tileSize: 0.5, boardSize: 8, offset: 0
+        boardRoot: null, boardVisuals: null, piecesRoot: null,
+        listenersSetup: false, tileSize: 0.5, boardSize: 8, offset: 0,
+        ui: null,
+        gameState: null,
+        lastSpaceState: null
     };
     state.offset = (state.boardSize * state.tileSize) / 2 - (state.tileSize / 2);
+
+    function getLocalUser() {
+        const scene = BS.BanterScene.GetInstance();
+        return scene && scene.localUser ? scene.localUser : null;
+    }
+
+    function isSpaceHost() {
+        const scene = BS.BanterScene.GetInstance();
+        if (!scene || !scene.localUser) return false;
+        if (scene.space && scene.space.owner && String(scene.space.owner.uid) === String(scene.localUser.uid)) return true;
+        if (scene.space && (scene.space.isHost || scene.space.isOwner)) return true;
+        const uids = Object.keys(scene.users || {}).sort();
+        return uids.length > 0 && String(uids[0]) === String(scene.localUser.uid);
+    }
+
+    function isPlayerPresent(uid) {
+        if (!uid) return false;
+        const scene = BS.BanterScene.GetInstance();
+        if (!scene) return false;
+        if (scene.localUser && String(scene.localUser.uid) === String(uid)) return true;
+        if (scene.users && scene.users[uid]) return true;
+        return false;
+    }
+
+    // A seat is idle when it is that side's turn and nothing has happened for lockTimeout seconds.
+    // The player waiting for their opponent is never idle.
+    function isSeatIdle(player, side) {
+        if (!player || !config.lockTimeout || config.lockTimeout <= 0) return false;
+        if (!chessGame || chessGame.chess.turn() !== side) return false;
+        const lastAction = state.gameState?.lastActionTime;
+        if (!lastAction) return false;
+        return (Date.now() - lastAction) > (config.lockTimeout * 1000);
+    }
+
+    function saveState(boardState) {
+        state.lastSpaceState = boardState;
+        state.gameState = boardState;
+        const stateKey = 'chess_game_' + config.instance;
+        BS.BanterScene.GetInstance().SetPublicSpaceProps({ [stateKey]: JSON.stringify(boardState) });
+    }
+
+    const SOUND_FILES = { move: 3, capture: 2, castle: 1, check: 1, promote: 1, win: 1, draw: 1, reset: 1 };
+    const MUTE_KEY = 'banterGames_muted_chess';
+    const sounds = { files: SOUND_FILES, cache: {}, live: false, prev: null, prevKey: null, muted: false };
+    try { sounds.muted = localStorage.getItem(MUTE_KEY) === '1'; } catch (e) { }
 
     async function initializeBoard() {
         console.log("Chess: Setup Started");
@@ -327,10 +378,19 @@
         rootTrans.localEulerAngles = config.boardRotation; // Apply Rotation
         rootTrans.localScale = config.boardScale;         // Apply Scale
 
+        // Visuals container for 3D board geometry (frame, tiles, pieces, lights)
+        // Can be toggled safely via SetActive(!culled) without breaking BanterUI
+        state.boardVisuals = await new BS.GameObject("ChessBoardVisuals");
+        await state.boardVisuals.SetParent(state.boardRoot, false);
+        let visTrans = await state.boardVisuals.AddComponent(new BS.Transform());
+        visTrans.localPosition = new BS.Vector3(0, 0, 0);
+        visTrans.localEulerAngles = new BS.Vector3(0, 0, 0);
+        visTrans.localScale = new BS.Vector3(1, 1, 1);
+
         // Add lights if we are using a lit shader and the user has not disabled them.
         if (config.lighting === 'lit' && config.addLights) {
             const lightGO = await new BS.GameObject("BanterChess_DirectionalLight");
-            await lightGO.SetParent(state.boardRoot, false);
+            await lightGO.SetParent(state.boardVisuals, false);
             let lightTrans = await lightGO.AddComponent(new BS.Transform());
             lightTrans.localPosition = new BS.Vector3(0, 5, -5); // Above and behind the board from white's perspective
             lightTrans.localEulerAngles = new BS.Vector3(45, 0, 0); // Angled down
@@ -341,16 +401,20 @@
 
         console.log("Board Initialized with Config:", config);
 
+        // Modern UI Panel replaces old 3D box reset/turn buttons
+        await buildModernUI();
+
         if (!config.hideBoard) await createBoardFrame();
         await generateTiles();
 
-        // Check UI flag to add buttons
-        // With hideUI the reset button is invisible but still clickable, with its label showing (as in Go)
-        await createResetButton();
-        await createTurnBoard(state.boardRoot, config.scoreboardPosition || [0, 1.5, 0], config.scoreboardRotation || [0, 0, 0], config.scoreboardScale || [1, 1, 1], 2.4, 0.4, true);
+        // Refresh the seats now and then, so idle and disconnected players show up.
+        setInterval(updateModernUI, 10000);
 
-        // Networking Setup
-        setupBanterStateListeners();
+        // Switch the game off when the local player is far away
+        setupDistanceCulling();
+
+        // Networking Setup & Initial Board Sync
+        await setupBanterStateListeners();
     }
 
     // A wooden frame round the squares, a little higher than them.
@@ -364,77 +428,531 @@
         ];
         for (let i = 0; i < bars.length; i++) {
             const [x, z, w, d] = bars[i];
-            await createBanterObject(`Frame_${i}`, state.boardRoot, new BS.Vector3(x, 0.01, z),
+            await createBanterObject(`Frame_${i}`, state.boardVisuals, new BS.Vector3(x, 0.01, z),
                 '#4A2C16', BS.GeometryType.BoxGeometry, { width: w, height: 0.14, depth: d });
         }
     }
 
-    // Puts a text label on a button's face (same approach as Go's buttons). `w` and `h` are the
-    // face size in metres; text is sized to fit it. `pos`/`rot` place the label on that face.
-    async function addButtonLabel(btn, text, w, h, pos, rot) {
-        const label = await new BS.GameObject("Label").Async();
-        await label.SetParent(btn, false);
-        const lt = await label.AddComponent(new BS.Transform());
-        lt.localPosition = pos;
-        lt.localEulerAngles = rot;
-        await label.AddComponent(new BS.BanterText(
-            text, new BS.Vector4(1, 1, 1, 1), BS.HorizontalAlignment.Center, BS.VerticalAlignment.Center,
-            h * 5, false, false, new BS.Vector2(w * 10, h * 10)
-        ));
+    // --- Modern UI Panel (BanterUI) & Game Controls ---
+    async function buildModernUI() {
+        if (config.hideUI) return;
+
+        const v3 = a => Array.isArray(a) ? new BS.Vector3(...a) : a;
+        let uiPos = config.scoreboardPosition ? v3(config.scoreboardPosition) : new BS.Vector3(0, 1, 0);
+        if (!uiPos || (uiPos.x === 0 && uiPos.y === 0 && uiPos.z === 0)) {
+            uiPos = new BS.Vector3(0, 1, 0);
+        }
+        const uiRot = config.scoreboardRotation ? v3(config.scoreboardRotation) : new BS.Vector3(0, 0, 0);
+
+        // scoreboardScale multiplies the panel's normal size, so 1 is the default and 2 is twice as big.
+        const UI_BASE_SCALE = 0.24;
+        const rawScale = config.scoreboardScale ? v3(config.scoreboardScale) : new BS.Vector3(1, 1, 1);
+        const uiScale = new BS.Vector3(UI_BASE_SCALE * rawScale.x, UI_BASE_SCALE * rawScale.y, UI_BASE_SCALE * rawScale.z);
+
+        const uiObj = await new BS.GameObject({
+            name: "Chess_CentralUI",
+            parent: state.boardRoot,
+            localPosition: uiPos,
+            localEulerAngles: uiRot,
+            localScale: uiScale
+        }).Async();
+
+        let t = uiObj.GetComponent(BS.ComponentType.Transform);
+        if (!t) t = await uiObj.AddComponent(new BS.Transform());
+
+        let billboard = await uiObj.AddComponent(new BS.BanterBillboard({ smoothing: 1, enableXAxis: false, enableYAxis: true }));
+        billboard.enableXAxis = false;
+
+        const panel = await uiObj.AddComponent(new BS.BanterUI(new BS.Vector2(650, 270), false));
+        const rootEl = panel.CreateVisualElement();
+        await rootEl.Async();
+
+        rootEl.SetStyles({
+            backgroundColor: 'rgba(15, 18, 26, 0.94)',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingTop: '14px',
+            paddingBottom: '14px',
+            paddingLeft: '18px',
+            paddingRight: '18px',
+            borderRadius: '16px',
+            borderWidth: '3px',
+            borderColor: 'rgba(80, 95, 125, 0.85)',
+            width: '100%',
+            height: '100%'
+        });
+
+        if (rootEl.parent && rootEl.parent.SetStyles) {
+            rootEl.parent.SetStyles({ backgroundColor: 'rgba(0, 0, 0, 0)' });
+        }
+
+        // Header Row: Title, Turn Status, Mute Button
+        const headerRow = panel.CreateVisualElement(rootEl);
+        await headerRow.Async();
+        headerRow.SetStyles({
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            width: '100%',
+            marginBottom: '4px',
+            backgroundColor: 'rgba(0,0,0,0)'
+        });
+
+        const title = panel.CreateLabel(undefined, headerRow);
+        await title.Async();
+        title.text = "CHESS";
+        title.SetStyles({
+            color: '#f0f0f0',
+            fontSize: '26px',
+            fontWeight: 'bold',
+            backgroundColor: 'rgba(0,0,0,0)',
+            marginRight: '10px'
+        });
+
+        const statusLabel = panel.CreateLabel(undefined, headerRow);
+        await statusLabel.Async();
+        statusLabel.text = turnStatusText();
+        statusLabel.SetStyles({
+            color: '#ffcc00',
+            fontSize: '24px',
+            fontWeight: 'bold',
+            textAlign: 'center',
+            flexGrow: '1',
+            backgroundColor: 'rgba(0,0,0,0)'
+        });
+
+        const muteBtn = panel.CreateButton(headerRow);
+        await muteBtn.Async();
+        if (muteBtn.parent && muteBtn.parent.SetStyles) {
+            muteBtn.parent.SetStyles({ backgroundColor: 'rgba(0,0,0,0)', backgroundImage: 'none' });
+        }
+        muteBtn.text = sounds.muted ? "🔇" : "🔊";
+        muteBtn.SetStyles({
+            backgroundColor: '#37474f',
+            color: 'white',
+            fontSize: '20px',
+            paddingTop: '6px',
+            paddingBottom: '6px',
+            paddingLeft: '14px',
+            paddingRight: '14px',
+            borderRadius: '8px',
+            borderWidth: '0px',
+            backgroundImage: 'none'
+        });
+        const handleMuteToggle = () => {
+            sounds.muted = !sounds.muted;
+            try { localStorage.setItem(MUTE_KEY, sounds.muted ? '1' : '0'); } catch (e) {}
+            muteBtn.text = sounds.muted ? "🔇" : "🔊";
+        };
+        if (typeof muteBtn.OnClick === 'function') muteBtn.OnClick(handleMuteToggle);
+        else if (typeof muteBtn.On === 'function') muteBtn.On('click', handleMuteToggle);
+
+        // Seats Row: White & Black Player Seats
+        const seatsRow = panel.CreateVisualElement(rootEl);
+        await seatsRow.Async();
+        seatsRow.SetStyles({
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            width: '100%',
+            marginTop: '6px',
+            marginBottom: '6px',
+            backgroundColor: 'rgba(0,0,0,0)'
+        });
+
+        const createSeatBtn = async (parent, text, color, textColor, handler) => {
+            const btn = panel.CreateButton(parent);
+            await btn.Async();
+            if (btn.parent && btn.parent.SetStyles) {
+                btn.parent.SetStyles({ backgroundColor: 'rgba(0,0,0,0)', backgroundImage: 'none' });
+            }
+            btn.text = text;
+            btn.SetStyles({
+                backgroundColor: color,
+                color: textColor || 'white',
+                fontSize: '20px',
+                fontWeight: 'bold',
+                paddingTop: '10px',
+                paddingBottom: '10px',
+                paddingLeft: '14px',
+                paddingRight: '14px',
+                borderRadius: '8px',
+                borderWidth: '2px',
+                borderColor: '#666666',
+                backgroundImage: 'none',
+                flexGrow: '1',
+                marginRight: '6px',
+                marginLeft: '6px'
+            });
+            if (typeof btn.OnClick === 'function') btn.OnClick(handler);
+            else if (typeof btn.On === 'function') btn.On('click', handler);
+            return btn;
+        };
+
+        const whiteSeatBtn = await createSeatBtn(seatsRow, "WHITE: [CLAIM]", '#ffffff', '#111111', () => handleWhiteSeatClick());
+        const blackSeatBtn = await createSeatBtn(seatsRow, "BLACK: [CLAIM]", '#262626', '#ffffff', () => handleBlackSeatClick());
+
+        // Actions Row: Reset Button & Notice Label
+        const actionsRow = panel.CreateVisualElement(rootEl);
+        await actionsRow.Async();
+        actionsRow.SetStyles({
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            width: '100%',
+            backgroundColor: 'rgba(0,0,0,0)'
+        });
+
+        const resetBtn = panel.CreateButton(actionsRow);
+        await resetBtn.Async();
+        if (resetBtn.parent && resetBtn.parent.SetStyles) {
+            resetBtn.parent.SetStyles({ backgroundColor: 'rgba(0,0,0,0)', backgroundImage: 'none' });
+        }
+        resetBtn.text = "RESET GAME";
+        resetBtn.SetStyles({
+            backgroundColor: '#c62828',
+            color: 'white',
+            fontSize: '18px',
+            fontWeight: 'bold',
+            paddingTop: '8px',
+            paddingBottom: '8px',
+            paddingLeft: '22px',
+            paddingRight: '22px',
+            borderRadius: '8px',
+            borderWidth: '0px',
+            backgroundImage: 'none',
+            marginRight: '12px'
+        });
+        const handleResetAction = () => handleResetClick();
+        if (typeof resetBtn.OnClick === 'function') resetBtn.OnClick(handleResetAction);
+        else if (typeof resetBtn.On === 'function') resetBtn.On('click', handleResetAction);
+
+        // Notice / Feedback Label
+        const noticeLabel = panel.CreateLabel(undefined, actionsRow);
+        await noticeLabel.Async();
+        noticeLabel.text = "";
+        noticeLabel.SetStyles({
+            color: '#ff7043',
+            fontSize: '15px',
+            textAlign: 'left',
+            flexGrow: '1',
+            minHeight: '20px',
+            backgroundColor: 'rgba(0,0,0,0)'
+        });
+
+        state.ui = {
+            obj: uiObj,
+            transform: t,
+            panel,
+            rootEl,
+            statusLabel,
+            whiteSeatBtn,
+            blackSeatBtn,
+            resetBtn,
+            muteBtn,
+            noticeLabel,
+            savedPos: uiPos,
+            savedScale: uiScale
+        };
+
+        updateModernUI();
+
     }
 
-    async function createResetButton() {
-        // Child of boardRoot so it scales/rotates with board
-        const btn = await new BS.GameObject("ResetButton").Async();
-        // FIX: SetParent with false to reset local scale relative to parent
-        await btn.SetParent(state.boardRoot, false);
+    function updateModernUI() {
+        if (!state.ui || !state.ui.statusLabel || isCulled) return;
 
-        // Transform: Position it "below" or "beside" the board side (z positive is "bottom" for white usually)
-        let trans = await btn.AddComponent(new BS.Transform());
-        trans.localPosition = config.resetPosition;
-        trans.localEulerAngles = config.resetRotation;
-        trans.localScale = config.resetScale;
+        state.ui.statusLabel.text = turnStatusText();
 
-        // Visuals: Red Box
-        const w = 1.0, h = 0.2, d = 0.4;
-        const geoArgs = [BS.GeometryType.BoxGeometry, null, w, h, d, 1, 1, 1, 0.5, 24, 0, 6.28, 0, 6.28, 8, false, 0.5, 0.5, 0, 1, 24, 8, 0.4, 16, 6.28, 2, 3, 5, 5, 0, ""];
-        await btn.AddComponent(new BS.BanterGeometry(...geoArgs));
+        const local = getLocalUser();
+        const localUidStr = local && local.uid !== undefined ? String(local.uid) : null;
+        const white = state.gameState?.whitePlayer;
+        const black = state.gameState?.blackPlayer;
+        const currentTurn = chessGame ? chessGame.chess.turn() : 'w';
 
-        const redColor = new BS.Vector4(0.8, 0.2, 0.2, config.hideUI ? 0 : 1);
-        const buttonShader = config.hideUI ? 'Unlit/DiffuseTransparent' : (config.lighting === 'lit' ? 'Standard' : 'Unlit/Diffuse');
-        await btn.AddComponent(new BS.BanterMaterial(buttonShader, "", redColor, BS.MaterialSide.Front, false));
+        if (state.ui.whiteSeatBtn) {
+            const whitePresent = white ? isPlayerPresent(white.uid) : false;
+            const whiteIdle = white ? isSeatIdle(white, 'w') : false;
 
-        // Collider for click
-        await btn.AddComponent(new BS.BoxCollider(true, new BS.Vector3(0, 0, 0), new BS.Vector3(w, h, d)));
-        await btn.SetLayer(5); // UI Layer
+            if (!white) {
+                state.ui.whiteSeatBtn.text = "WHITE: [CLAIM]";
+                state.ui.whiteSeatBtn.SetStyles({
+                    backgroundColor: '#ffffff',
+                    color: '#111111',
+                    borderColor: currentTurn === 'w' ? '#4CAF50' : '#888888',
+                    borderWidth: currentTurn === 'w' ? '3px' : '2px'
+                });
+            } else if (localUidStr && String(white.uid) === localUidStr) {
+                state.ui.whiteSeatBtn.text = `WHITE: YOU (${white.name}) [LEAVE]`;
+                state.ui.whiteSeatBtn.SetStyles({
+                    backgroundColor: '#e8f5e9',
+                    color: '#111111',
+                    borderColor: currentTurn === 'w' ? '#4CAF50' : '#2e7d32',
+                    borderWidth: currentTurn === 'w' ? '3px' : '2px'
+                });
+            } else if (!whitePresent) {
+                state.ui.whiteSeatBtn.text = "WHITE: Disconnected [RECLAIM]";
+                state.ui.whiteSeatBtn.SetStyles({
+                    backgroundColor: '#ffebee',
+                    color: '#c62828',
+                    borderColor: '#e57373',
+                    borderWidth: '2px'
+                });
+            } else if (whiteIdle && currentTurn === 'w') {
+                state.ui.whiteSeatBtn.text = `WHITE: ${white.name} (Idle) [RECLAIM]`;
+                state.ui.whiteSeatBtn.SetStyles({
+                    backgroundColor: '#fff8e1',
+                    color: '#f57f17',
+                    borderColor: '#ffb300',
+                    borderWidth: '2px'
+                });
+            } else {
+                state.ui.whiteSeatBtn.text = `WHITE: ${white.name}`;
+                state.ui.whiteSeatBtn.SetStyles({
+                    backgroundColor: '#eeeeee',
+                    color: '#333333',
+                    borderColor: currentTurn === 'w' ? '#4CAF50' : '#888888',
+                    borderWidth: currentTurn === 'w' ? '3px' : '2px'
+                });
+            }
+        }
 
-        await addButtonLabel(btn, "RESET", 1.0, 0.4, new BS.Vector3(0, 0.105, 0), new BS.Vector3(90, 180, 0));
-        await createMuteButton(btn, state.boardRoot, [1.0, 0.2, 0.4], true);
+        if (state.ui.blackSeatBtn) {
+            const blackPresent = black ? isPlayerPresent(black.uid) : false;
+            const blackIdle = black ? isSeatIdle(black, 'b') : false;
 
-        // Logic
-        btn.On('click', () => {
-            console.log("Requesting game reset...");
-            const boardState = { fen: 'reset' };
-            const stateKey = 'chess_game_' + config.instance;
-            BS.BanterScene.GetInstance().SetPublicSpaceProps({ [stateKey]: JSON.stringify(boardState) });
+            if (!black) {
+                state.ui.blackSeatBtn.text = "BLACK: [CLAIM]";
+                state.ui.blackSeatBtn.SetStyles({
+                    backgroundColor: '#262626',
+                    color: '#ffffff',
+                    borderColor: currentTurn === 'b' ? '#4CAF50' : '#666666',
+                    borderWidth: currentTurn === 'b' ? '3px' : '2px'
+                });
+            } else if (localUidStr && String(black.uid) === localUidStr) {
+                state.ui.blackSeatBtn.text = `BLACK: YOU (${black.name}) [LEAVE]`;
+                state.ui.blackSeatBtn.SetStyles({
+                    backgroundColor: '#1b3820',
+                    color: '#ffffff',
+                    borderColor: currentTurn === 'b' ? '#4CAF50' : '#2e7d32',
+                    borderWidth: currentTurn === 'b' ? '3px' : '2px'
+                });
+            } else if (!blackPresent) {
+                state.ui.blackSeatBtn.text = "BLACK: Disconnected [RECLAIM]";
+                state.ui.blackSeatBtn.SetStyles({
+                    backgroundColor: '#3e2723',
+                    color: '#ffab91',
+                    borderColor: '#e57373',
+                    borderWidth: '2px'
+                });
+            } else if (blackIdle && currentTurn === 'b') {
+                state.ui.blackSeatBtn.text = `BLACK: ${black.name} (Idle) [RECLAIM]`;
+                state.ui.blackSeatBtn.SetStyles({
+                    backgroundColor: '#3e2723',
+                    color: '#ffe082',
+                    borderColor: '#ffb300',
+                    borderWidth: '2px'
+                });
+            } else {
+                state.ui.blackSeatBtn.text = `BLACK: ${black.name}`;
+                state.ui.blackSeatBtn.SetStyles({
+                    backgroundColor: '#222222',
+                    color: '#aaaaaa',
+                    borderColor: currentTurn === 'b' ? '#4CAF50' : '#555555',
+                    borderWidth: currentTurn === 'b' ? '3px' : '2px'
+                });
+            }
+        }
 
-            // Optimistically reset for the local user, as the `space-state-changed` event
-            // may not fire reliably for the originating client.
-            console.log("Optimistically resetting local board.");
-            chessGame.reset();
+        if (state.ui.muteBtn) {
+            state.ui.muteBtn.text = sounds.muted ? "🔇" : "🔊";
+        }
+    }
+
+    function handleWhiteSeatClick() {
+        const local = getLocalUser();
+        if (!local || local.uid === undefined) {
+            showTurnNotice("Could not determine your user ID");
+            return;
+        }
+        const white = state.gameState?.whitePlayer;
+        const black = state.gameState?.blackPlayer;
+        const localUidStr = String(local.uid);
+
+        const whitePresent = white ? isPlayerPresent(white.uid) : false;
+        const whiteIdle = white ? isSeatIdle(white, 'w') : false;
+
+        if (!white || !whitePresent || whiteIdle) {
+            const newBlack = (black && String(black.uid) === localUidStr) ? null : black;
+            updateSeats({ uid: localUidStr, name: local.name || "Player" }, newBlack);
+            showTurnNotice("You claimed White");
+        } else if (String(white.uid) === localUidStr) {
+            updateSeats(null, black);
+            showTurnNotice("You left White");
+        } else {
+            showTurnNotice(`White is taken by ${white.name}`);
+        }
+    }
+
+    function handleBlackSeatClick() {
+        const local = getLocalUser();
+        if (!local || local.uid === undefined) {
+            showTurnNotice("Could not determine your user ID");
+            return;
+        }
+        const white = state.gameState?.whitePlayer;
+        const black = state.gameState?.blackPlayer;
+        const localUidStr = String(local.uid);
+
+        const blackPresent = black ? isPlayerPresent(black.uid) : false;
+        const blackIdle = black ? isSeatIdle(black, 'b') : false;
+
+        if (!black || !blackPresent || blackIdle) {
+            const newWhite = (white && String(white.uid) === localUidStr) ? null : white;
+            updateSeats(newWhite, { uid: localUidStr, name: local.name || "Player" });
+            showTurnNotice("You claimed Black");
+        } else if (String(black.uid) === localUidStr) {
+            updateSeats(white, null);
+            showTurnNotice("You left Black");
+        } else {
+            showTurnNotice(`Black is taken by ${black.name}`);
+        }
+    }
+
+    function updateSeats(whitePlayer, blackPlayer) {
+        const fen = chessGame.getFen();
+        const currentData = state.lastSpaceState || {};
+        const newState = {
+            ...currentData,
+            fen: currentData.fen || fen,
+            whitePlayer: whitePlayer || null,
+            blackPlayer: blackPlayer || null,
+            lastActionTime: Date.now()
+        };
+        saveState(newState);
+        updateModernUI();
+    }
+
+    function handleResetClick() {
+        const local = getLocalUser();
+        const white = state.gameState?.whitePlayer;
+        const black = state.gameState?.blackPlayer;
+        const isGameActive = chessGame && chessGame.getFen() !== STARTING_FEN;
+        const isGameOver = chessGame && (chessCheck('in_checkmate', 'isCheckmate') || chessCheck('in_draw', 'isDraw') || chessCheck('in_stalemate', 'isStalemate'));
+        const isSeatClaimed = !!(white || black);
+
+        if (isSeatClaimed && isGameActive && !isGameOver) {
+            const localUidStr = local && local.uid !== undefined ? String(local.uid) : null;
+            const isWhite = white && String(white.uid) === localUidStr;
+            const isBlack = black && String(black.uid) === localUidStr;
+            const isHost = isSpaceHost();
+            const whitePresent = white ? isPlayerPresent(white.uid) : true;
+            const blackPresent = black ? isPlayerPresent(black.uid) : true;
+            const whiteIdle = white ? isSeatIdle(white, 'w') : false;
+            const blackIdle = black ? isSeatIdle(black, 'b') : false;
+
+            const hasAbandonedSeat = (!whitePresent || whiteIdle || !blackPresent || blackIdle);
+
+            if (!isWhite && !isBlack && !isHost && !hasAbandonedSeat) {
+                showTurnNotice("Only seated players or host can reset an active game!");
+                return;
+            }
+        }
+
+        console.log("Requesting game reset...");
+        const currentData = state.lastSpaceState || {};
+        const boardState = {
+            ...currentData,
+            fen: 'reset',
+            lastMove: null,
+            lastActionTime: Date.now()
+        };
+        saveState(boardState);
+
+        console.log("Optimistically resetting local board.");
+        chessGame.reset();
+        syncBoard();
+        clearSelection();
+        showTurnNotice("Game reset");
+        updateModernUI();
+    }
+
+    // --- Distance-based Object Culling ---
+    let isCulled = false;
+    let cullingInterval = null;
+
+    function setupDistanceCulling() {
+        if (config.cullDistance <= 0 || cullingInterval) return;
+        // Checks once a second; does nothing until the player's head position is known.
+        cullingInterval = setInterval(updateCulling, 1000);
+    }
+
+    function updateCulling() {
+        if (config.cullDistance <= 0 || !state.boardRoot) {
+            if (isCulled) setCulled(false);
+            return;
+        }
+
+        const head = headTracker();
+        const p = head.markerPos || head.posePos;
+        if (!p) return;
+
+        const bPos = config.boardPosition;
+        const dist = Math.hypot(p.x - bPos.x, p.y - bPos.y, p.z - bPos.z);
+        // Switch off past cullDistance, back on a metre inside it, so it doesn't flicker at the edge.
+        const shouldCull = isCulled ? dist > config.cullDistance - 1 : dist > config.cullDistance;
+
+        if (shouldCull !== isCulled) {
+            setCulled(shouldCull);
+        }
+    }
+
+    // Turns the whole game off (board, pieces, UI panel) when the local player is far from it, and
+    // back on. The board is switched off with SetActive. The UI panel is destroyed and built again
+    // instead, because a BanterUI panel loses its contents when it is switched off and on.
+    // While off, incoming moves are still tracked; the pieces are redrawn when it comes back on.
+    let uiBuilding = null;
+    function setCulled(culled) {
+        isCulled = culled;
+        if (!state.boardRoot) return;
+        if (state.boardVisuals) {
+            try {
+                state.boardVisuals.SetActive(!culled);
+            } catch (e) {
+                console.warn("Chess: Could not switch the board on/off", e);
+            }
+        }
+        if (culled) {
+            destroyUI();
+        } else {
+            if (!state.ui && !uiBuilding && !config.hideUI) {
+                uiBuilding = buildModernUI()
+                    .catch(e => console.warn("Chess: Could not rebuild the UI", e))
+                    .finally(() => {
+                        uiBuilding = null;
+                        if (isCulled) destroyUI(); // went out of range while it was being built
+                    });
+            }
             syncBoard();
-            clearSelection();
-        });
+            updateModernUI();
+        }
+    }
+
+    function destroyUI() {
+        if (!state.ui) return;
+        const obj = state.ui.obj;
+        state.ui = null;
+        try { obj.Destroy(); } catch (e) { console.warn("Chess: Could not remove the UI", e); }
     }
 
     async function createBanterObject(name, parent, posLocal, colorHex, geometryType, dims) {
-        const obj = await new BS.GameObject(name).Async();
-        // FIX: SetParent with false to reset local scale relative to parent
-        await obj.SetParent(parent, false);
-
-        let transform = obj.GetComponent(BS.ComponentType.Transform);
-        if (!transform) transform = await obj.AddComponent(new BS.Transform());
-        transform.localPosition = posLocal;
+        const obj = await new BS.GameObject({
+            name: name,
+            parent: parent,
+            localPosition: posLocal
+        }).Async();
 
         const geoArgs = getGeometryArgs(geometryType, dims);
         await obj.AddComponent(new BS.BanterGeometry(...geoArgs));
@@ -493,7 +1011,7 @@
                 const xPos = (x * size) - state.offset;
                 const zPos = -((rank - 1) * size) + state.offset;
 
-                const tile = await createBanterObject(`Tile_${squareId}`, state.boardRoot, new BS.Vector3(xPos, 0, zPos),
+                const tile = await createBanterObject(`Tile_${squareId}`, state.boardVisuals, new BS.Vector3(xPos, 0, zPos),
                     isWhite ? COLORS.white : COLORS.black, BS.GeometryType.BoxGeometry, { width: 0.5, height: 0.1, depth: 0.5 });
 
                 tile.On('click', () => handleSquareClick(squareId));
@@ -503,8 +1021,6 @@
                 setMaterialColor(tile, isWhite ? COLORS.white : COLORS.black);
             }
         }
-        // Initial Sync
-        await syncBoard();
     }
 
     const PIECE_MODELS = {
@@ -551,7 +1067,7 @@
             }
         } catch (e) { console.error("Error resolving model URL:", e); }
         // Fallback if script tag parsing failed
-        return `models/${modelName}`;
+        return `https://chess.firer.at/models/${modelName}`;
     }
 
     async function createPiece(char, squareId, parent) {
@@ -565,60 +1081,53 @@
                 return null;
             }
 
-            const piece = await new BS.GameObject(`Piece_${type}_${Math.random().toString(36).substr(2, 5)}`).Async();
-            await piece.SetParent(parent, false);
+            const piece = await withTimeout(
+                new BS.GameObject({
+                    name: `Piece_${char}_${squareId}_${Math.random().toString(36).substr(2, 5)}`,
+                    parent: parent,
+                    localPosition: getPiecePos(squareId, char),
+                    localEulerAngles: new BS.Vector3(0, isWhite ? 180 : 0, 0),
+                    localScale: new BS.Vector3(1, 1, 1)
+                }).Async(),
+                5000,
+                `GameObject ${char} on ${squareId}`
+            );
 
-            let transform = piece.GetComponent(BS.ComponentType.Transform);
-            if (!transform) transform = await piece.AddComponent(new BS.Transform());
-
-            // USE HELPER for position - a piece's position is its square
-            transform.localPosition = getPiecePos(squareId, char);
-            transform.localScale = new BS.Vector3(1, 1, 1);
-
-            // The piece's root object should not be rotated.
-            // Create a child "model" object to contain the GLTF and its rotation.
-            const model = await new BS.GameObject(`Model_${type}`).Async();
-            await model.SetParent(piece, false);
-
-            let modelTransform = await model.AddComponent(new BS.Transform());
-            modelTransform.localEulerAngles = new BS.Vector3(0, isWhite ? 180 : 0, 0);
-            modelTransform.localScale = new BS.Vector3(1, 1, 1);
-
-            // CHANGED: Use subfolders for White/Black models
             const folder = isWhite ? 'White' : 'Black';
             const url = getModelUrl(`${folder}/${modelName}`);
             console.log(`Loading GLB from: ${url}`);
 
             try {
-                // Attach GLTF to the model sub-object
-                await model.AddComponent(new BS.BanterGLTF(url, false, false, false, false, false, false));
+                await withTimeout(
+                    piece.AddComponent(new BS.BanterGLTF(url, false, false, false, false, false, false)),
+                    5000,
+                    `BanterGLTF ${char} on ${squareId}`
+                );
 
-                // If using lit lighting, add a standard material to override the GLTF's unlit one.
-                if (config.lighting === 'lit') {
+                // Only add custom material if unlit or custom opacity is requested;
+                // standard GLTF PBR textures/materials are already embedded inside White/ and Black/ GLBs
+                if (config.lighting !== 'lit' || config.piecesOpacity < 1.0) {
                     const colorHex = isWhite ? COLORS.whitePiece : COLORS.blackPiece;
                     const colorVec4 = hexToVector4(colorHex);
-                    // This is a speculative change. It assumes adding a new BanterMaterial will
-                    // override the material of the loaded GLTF. The "Standard" shader is also a guess.
-                    await model.AddComponent(new BS.BanterMaterial("Standard", "", colorVec4, BS.MaterialSide.Front, false));
-                } else {
-                    // For unlit, we'll apply our own material to control color and transparency.
-                    const colorHex = isWhite ? COLORS.whitePiece : COLORS.blackPiece;
-                    const colorVec4 = hexToVector4(colorHex);
-                    colorVec4.w = config.piecesOpacity; // Set alpha
-
+                    colorVec4.w = config.piecesOpacity;
                     const isTransparent = config.piecesOpacity < 1.0;
-                    // Use the transparent shader and texture if opacity is less than 1
                     const shader = isTransparent ? 'Unlit/DiffuseTransparent' : 'Unlit/Diffuse';
-                    const texture = isTransparent ? null : '';
-                    
-                    await model.AddComponent(new BS.BanterMaterial(shader, texture, colorVec4, BS.MaterialSide.Front, false));
+                    await withTimeout(
+                        piece.AddComponent(new BS.BanterMaterial(shader, isTransparent ? null : '', colorVec4, BS.MaterialSide.Front, false)),
+                        4000,
+                        `BanterMaterial ${char} on ${squareId}`
+                    );
                 }
             } catch (glbErr) {
                 console.error(`Failed to load GLTF for ${char}:`, glbErr);
             }
 
             // Collider for click - Stays on the main piece object for correct click handling
-            await piece.AddComponent(new BS.BoxCollider(true, new BS.Vector3(0, 0.15, 0), new BS.Vector3(0.2, 0.15, 0.2)));
+            await withTimeout(
+                piece.AddComponent(new BS.BoxCollider(true, new BS.Vector3(0, 0.15, 0), new BS.Vector3(0.2, 0.15, 0.2))),
+                4000,
+                `BoxCollider ${char} on ${squareId}`
+            );
             await piece.SetLayer(5); // UI layer
 
             piece.On('click', () => {
@@ -641,13 +1150,17 @@
     // and redraw once more if a new one was requested mid-run.
     let redrawing = null;
     let redrawAgain = false;
+    let renderStatus = "idle";
+    let lastRenderError = null;
     function syncBoard() {
         soundForState();
         redrawAgain = true;
-        if (!redrawing) {
+        // While the game is switched off nothing is drawn; setCulled(false) redraws.
+        if (!redrawing && !isCulled) {
             redrawing = (async () => {
+                await null; // so `redrawing` is set before the finally below can clear it
                 try {
-                    while (redrawAgain) {
+                    while (redrawAgain && !isCulled) {
                         redrawAgain = false;
                         await renderBoard();
                         updateTurnBoard();
@@ -662,92 +1175,109 @@
 
     async function renderBoard() {
         console.log("Syncing board...");
-        if (!state.piecesRoot) {
-            state.piecesRoot = await new BS.GameObject("PiecesContainer").Async();
-            await state.piecesRoot.SetParent(state.boardRoot, false);
-            let trans = await state.piecesRoot.AddComponent(new BS.Transform());
-            trans.localPosition = new BS.Vector3(0, 0, 0);
-        }
-
-        const fen = chessGame.getFen();
-        const rows = fen.split(' ')[0].split('/');
-        const letters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
-        const newBoardState = {};
-
-        // 1. Map current board state based on FEN
-        rows.forEach((row, rowIndex) => {
-            const rank = 8 - rowIndex;
-            let fileIndex = 0;
-            for (let char of row) {
-                if (parseInt(char)) fileIndex += parseInt(char);
-                else {
-                    newBoardState[`${letters[fileIndex]}${rank}`] = char;
-                    fileIndex++;
-                }
+        try {
+            renderStatus = "starting renderBoard";
+            if (!state.piecesRoot) {
+                state.piecesRoot = await new BS.GameObject("PiecesContainer").Async();
+                await state.piecesRoot.SetParent(state.boardVisuals, false);
+                let trans = await state.piecesRoot.AddComponent(new BS.Transform());
+                trans.localPosition = new BS.Vector3(0, 0, 0);
             }
-        });
 
-        // 2. Prepare pool of available pieces from current state
-        const availablePieces = {}; // char -> [GameObject]
-        if (state.pieces) {
-            Object.values(state.pieces).forEach(p => {
-                const type = p.pieceType;
-                if (!availablePieces[type]) availablePieces[type] = [];
-                availablePieces[type].push(p);
+            const fen = chessGame.getFen();
+            const rows = fen.split(' ')[0].split('/');
+            const letters = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'];
+            const newBoardState = {};
+
+            // 1. Map current board state based on FEN
+            rows.forEach((row, rowIndex) => {
+                const rank = 8 - rowIndex;
+                let fileIndex = 0;
+                for (let char of row) {
+                    if (parseInt(char)) fileIndex += parseInt(char);
+                    else {
+                        newBoardState[`${letters[fileIndex]}${rank}`] = char;
+                        fileIndex++;
+                    }
+                }
             });
-        }
 
-        const nextPiecesMap = {};
-        const pendingSquares = [];
+            // 2. Prepare pool of available pieces from current state
+            const availablePieces = {}; // char -> [GameObject]
+            if (state.pieces) {
+                Object.values(state.pieces).forEach(p => {
+                    const type = p.pieceType;
+                    if (!availablePieces[type]) availablePieces[type] = [];
+                    availablePieces[type].push(p);
+                });
+            }
 
-        // 3. PASS 1: Keep pieces in place if possible
-        for (const [sq, char] of Object.entries(newBoardState)) {
-            const existingPieceOnSquare = state.pieces ? state.pieces[sq] : null;
-            if (existingPieceOnSquare && existingPieceOnSquare.pieceType === char) {
-                // Exact match in place - LOCK IT
-                nextPiecesMap[sq] = existingPieceOnSquare;
+            const nextPiecesMap = {};
+            const pendingSquares = [];
 
-                // Remove from pool so it can't be stolen
-                const list = availablePieces[char];
-                if (list) {
-                    const idx = list.indexOf(existingPieceOnSquare);
-                    if (idx > -1) list.splice(idx, 1);
+            // 3. PASS 1: Keep pieces in place if possible
+            for (const [sq, char] of Object.entries(newBoardState)) {
+                const existingPieceOnSquare = state.pieces ? state.pieces[sq] : null;
+                if (existingPieceOnSquare && existingPieceOnSquare.pieceType === char) {
+                    // Exact match in place - LOCK IT
+                    nextPiecesMap[sq] = existingPieceOnSquare;
+
+                    // Remove from pool so it can't be stolen
+                    const list = availablePieces[char];
+                    if (list) {
+                        const idx = list.indexOf(existingPieceOnSquare);
+                        if (idx > -1) list.splice(idx, 1);
+                    }
+                } else {
+                    // Needs a piece, try to resolve in Pass 2
+                    pendingSquares.push({ sq, char });
                 }
-            } else {
-                // Needs a piece, try to resolve in Pass 2
-                pendingSquares.push({ sq, char });
             }
+
+            // 4. PASS 2: Match available moved pieces or schedule concurrent creation
+            const piecesToCreate = [];
+            for (const { sq, char } of pendingSquares) {
+                if (availablePieces[char] && availablePieces[char].length > 0) {
+                    const piece = availablePieces[char].pop();
+                    const trans = piece.GetComponent(BS.ComponentType.Transform);
+                    if (trans) trans.localPosition = getPiecePos(sq, char);
+                    nextPiecesMap[sq] = piece;
+                } else {
+                    piecesToCreate.push({ sq, char });
+                }
+            }
+
+            if (piecesToCreate.length > 0) {
+                renderStatus = `creating ${piecesToCreate.length} pieces concurrently`;
+                const createdResults = await Promise.all(
+                    piecesToCreate.map(async ({ sq, char }) => {
+                        const piece = await createPiece(char, sq, state.piecesRoot);
+                        return { sq, piece };
+                    })
+                );
+                for (const { sq, piece } of createdResults) {
+                    if (piece) {
+                        nextPiecesMap[sq] = piece;
+                    }
+                }
+            }
+
+            // 5. Destroy unused pieces (captured)
+            for (const list of Object.values(availablePieces)) {
+                for (const p of list) {
+                    p.Destroy();
+                }
+            }
+
+            // 6. Update State
+            state.pieces = nextPiecesMap;
+            renderStatus = `complete (${Object.keys(nextPiecesMap).length} pieces)`;
+            console.log("Board sync complete.");
+        } catch (e) {
+            lastRenderError = e.message + " | " + (e.stack || "");
+            renderStatus = "error: " + e.message;
+            console.error("renderBoard error:", e);
         }
-
-        // 4. PASS 2: Fill gaps (moved pieces or new promotions)
-        for (const { sq, char } of pendingSquares) {
-            let piece = null;
-            if (availablePieces[char] && availablePieces[char].length > 0) {
-                // Reuse a piece that moved from somewhere else
-                piece = availablePieces[char].pop();
-                const trans = piece.GetComponent(BS.ComponentType.Transform);
-                // FIX: Use getPiecePos so moved pieces keep their Y-offset
-                if (trans) trans.localPosition = getPiecePos(sq, char);
-            } else {
-                // Determine creation parent (piecesRoot)
-                piece = await createPiece(char, sq, state.piecesRoot);
-            }
-
-            if (piece) {
-                nextPiecesMap[sq] = piece;
-            }
-        }
-
-        // 5. Destroy unused pieces (captured)
-        for (const list of Object.values(availablePieces)) {
-            for (const p of list) {
-                p.Destroy();
-            }
-        }
-
-        // 6. Update State
-        state.pieces = nextPiecesMap;
-        console.log("Board sync complete.");
     }
 
     function setMaterialColor(go, hexColor) {
@@ -768,18 +1298,6 @@
             console.warn("No BanterMaterial found on", go.name);
         }
     }
-
-    const SOUND_FILES = { move: 3, capture: 2, castle: 1, check: 1, promote: 1, win: 1, draw: 1, reset: 1 }; // name: number of takes
-
-    // --- Sounds ---
-    // Short sound effects for moves, captures, wins and resets. Each client works out what changed
-    // between two game states and plays the matching sound, so everyone hears every move. Joining is
-    // silent, and our own move echoed back by the space only plays once. The files are in Sounds/
-    // next to this script (made by sound-tools/make_sounds.py). `volume` (0-1) sets the level;
-    // 0 turns sounds off.
-    const MUTE_KEY = 'banterGames_muted_chess';
-    const sounds = { files: SOUND_FILES, cache: {}, live: false, prev: null, prevKey: null, muted: false };
-    try { sounds.muted = localStorage.getItem(MUTE_KEY) === '1'; } catch (e) { }
 
     function soundAudio(file) {
         let a = sounds.cache[file];
@@ -904,58 +1422,6 @@
         return f * f;
     }
 
-    // The mute button only mutes this game's sounds for you, and is remembered on this device. By
-    // default it sits beside the Reset button, attached to it so it follows it; set mutePosition
-    // (relative to the board) to place it on its own. `size` is the Reset button's
-    // [width, height, depth], and `flat` is true when it lies flat with its label on top.
-    async function createMuteButton(reset, parent, size, flat) {
-        if (!reset) return;
-        const v3 = a => Array.isArray(a) ? new BS.Vector3(...a) : a;
-        const [rw, h, d] = size;
-        const w = rw * 0.8;
-        const btn = await new BS.GameObject("MuteButton").Async();
-        const custom = !!config.mutePosition;
-        await btn.SetParent(custom ? parent : reset, false);
-        const t = await btn.AddComponent(new BS.Transform());
-        if (custom) {
-            t.localPosition = v3(config.mutePosition);
-        } else {
-            // Beside Reset, on the side away from the middle of the board
-            const side = config.resetPosition && config.resetPosition.x < 0 ? -1 : 1;
-            t.localPosition = new BS.Vector3(side * (rw / 2 + rw * 0.08 + w / 2), 0, 0);
-        }
-        t.localEulerAngles = v3(config.muteRotation);
-        t.localScale = v3(config.muteScale);
-        await btn.AddComponent(new BS.BanterGeometry(BS.GeometryType.BoxGeometry, null, w, h, d));
-        // With hideUI it's invisible but still clickable, with its label showing (like Reset)
-        const alpha = config.hideUI ? 0 : 1;
-        const shader = config.hideUI ? 'Unlit/DiffuseTransparent' : (config.lighting === 'lit' ? 'Standard' : 'Unlit/Diffuse');
-        const colour = () => sounds.muted ? new BS.Vector4(0.8, 0.42, 0.05, alpha) : new BS.Vector4(0.25, 0.25, 0.28, alpha);
-        const mat = await btn.AddComponent(new BS.BanterMaterial(shader, "", colour(), BS.MaterialSide.Front, false));
-        await btn.AddComponent(new BS.BoxCollider(true, new BS.Vector3(0, 0, 0), new BS.Vector3(w, h, d)));
-        await btn.SetLayer(5);
-        const label = await new BS.GameObject("Label").Async();
-        await label.SetParent(btn, false);
-        const lt = await label.AddComponent(new BS.Transform());
-        lt.localPosition = flat ? new BS.Vector3(0, h / 2 + 0.005, 0) : new BS.Vector3(0, 0, d / 2 + 0.005);
-        lt.localEulerAngles = flat ? new BS.Vector3(90, 180, 0) : new BS.Vector3(0, 180, 0);
-        const lh = flat ? d : h;
-        const text = await label.AddComponent(new BS.BanterText(
-            "", new BS.Vector4(1, 1, 1, 1), BS.HorizontalAlignment.Center, BS.VerticalAlignment.Center,
-            lh * 3.5, false, false, new BS.Vector2(w * 10, lh * 10)
-        ));
-        const update = () => {
-            text.text = sounds.muted ? "UNMUTE" : "MUTE";
-            mat.color = colour();
-        };
-        update();
-        btn.On('click', () => {
-            sounds.muted = !sounds.muted;
-            try { localStorage.setItem(MUTE_KEY, sounds.muted ? '1' : '0'); } catch (e) { }
-            update();
-        });
-    }
-
     // Cells (of a 2D board) that differ between two boards.
     function boardDiff(a, b) {
         const out = [];
@@ -1034,44 +1500,15 @@
         clearTimeout(turnGuard.noticeTimer);
         turnGuard.noticeTimer = setTimeout(() => {
             turnGuard.notice = '';
+            if (state.ui && state.ui.noticeLabel) state.ui.noticeLabel.text = "";
             updateTurnBoard();
-        }, 2500);
+        }, 3000);
+        if (state.ui && state.ui.noticeLabel) state.ui.noticeLabel.text = text;
         updateTurnBoard();
     }
 
     function updateTurnBoard() {
-        const text = turnGuard.notice || turnStatusText();
-        turnGuard.texts.forEach(t => { t.text = text; });
-    }
-
-    // A small sign showing whose turn it is. Not created when hideUI is on. `twoSided` puts the
-    // text on both faces, for table games played from both sides.
-    async function createTurnBoard(parent, pos, rot, scale, w, h, twoSided) {
-        if (config.hideUI) return;
-        const v3 = a => Array.isArray(a) ? new BS.Vector3(...a) : a;
-        const board = await new BS.GameObject("TurnBoard").Async();
-        await board.SetParent(parent, false);
-        const t = await board.AddComponent(new BS.Transform());
-        t.localPosition = v3(pos);
-        t.localEulerAngles = v3(rot);
-        t.localScale = v3(scale);
-        await board.AddComponent(new BS.BanterGeometry(BS.GeometryType.BoxGeometry, null, w, h, 0.02));
-        const shader = config.lighting === 'lit' ? "Standard" : "Unlit/Diffuse";
-        await board.AddComponent(new BS.BanterMaterial(shader, "", new BS.Vector4(0.96, 0.96, 0.86, 1), BS.MaterialSide.Front, false));
-
-        const faces = twoSided ? [[0.012, 180], [-0.012, 0]] : [[0.012, 180]];
-        for (const [z, yRot] of faces) {
-            const textObj = await new BS.GameObject("TurnText").Async();
-            await textObj.SetParent(board, false);
-            const tt = await textObj.AddComponent(new BS.Transform());
-            tt.localPosition = new BS.Vector3(0, 0, z);
-            tt.localEulerAngles = new BS.Vector3(0, yRot, 0);
-            turnGuard.texts.push(await textObj.AddComponent(new BS.BanterText(
-                "", new BS.Vector4(0, 0, 0, 1), BS.HorizontalAlignment.Center, BS.VerticalAlignment.Center,
-                h * 3, false, true, new BS.Vector2(w * 10, h * 10)
-            )));
-        }
-        updateTurnBoard();
+        updateModernUI();
     }
 
     // chess.js renamed its methods (in_checkmate -> isCheckmate), so accept either.
@@ -1094,10 +1531,46 @@
 
     function handleSquareClick(squareId) {
         const game = chessGame;
-        if (turnOnCooldown(game.chess.turn())) return;
         const side = game.chess.turn();
+        const local = getLocalUser();
+        const localUidStr = local && local.uid !== undefined ? String(local.uid) : null;
+        const white = state.gameState?.whitePlayer;
+        const black = state.gameState?.blackPlayer;
+
+        // Seat check: if a seat is claimed, only the seated player can move for that side.
+        // If the player disconnected or is idle (>90s), allow another player to take over.
+        if (side === 'w' && white) {
+            const whitePresent = isPlayerPresent(white.uid);
+            const whiteIdle = isSeatIdle(white, 'w');
+            if (!whitePresent || whiteIdle) {
+                if (localUidStr && String(white.uid) !== localUidStr) {
+                    showTurnNotice(`White is ${!whitePresent ? 'disconnected' : 'idle'} — claimed seat`);
+                    updateSeats({ uid: localUidStr, name: local ? (local.name || "Player") : "Player" }, black);
+                }
+            } else if (!localUidStr || String(white.uid) !== localUidStr) {
+                showTurnNotice(`It is ${white.name}'s turn (White)`);
+                return;
+            }
+        } else if (side === 'b' && black) {
+            const blackPresent = isPlayerPresent(black.uid);
+            const blackIdle = isSeatIdle(black, 'b');
+            if (!blackPresent || blackIdle) {
+                if (localUidStr && String(black.uid) !== localUidStr) {
+                    showTurnNotice(`Black is ${!blackPresent ? 'disconnected' : 'idle'} — claimed seat`);
+                    updateSeats(white, { uid: localUidStr, name: local ? (local.name || "Player") : "Player" });
+                }
+            } else if (!localUidStr || String(black.uid) !== localUidStr) {
+                showTurnNotice(`It is ${black.name}'s turn (Black)`);
+                return;
+            }
+        }
+
+        if (turnOnCooldown(side)) return;
+
         if (!state.selectedSquare) {
-            if (game.chess.get(squareId)) {
+            const piece = game.chess.get(squareId);
+            if (piece) {
+                if (piece.color !== side) return;
                 state.selectedSquare = squareId;
                 if (state.tiles[squareId]) setMaterialColor(state.tiles[squareId], COLORS.selected);
                 game.getMoves(squareId).forEach(m => {
@@ -1107,24 +1580,26 @@
             return;
         }
 
-
         const move = { from: state.selectedSquare, to: squareId, promotion: 'q' };
         if (game.makeMove(move)) {
             const fen = game.getFen();
-            const boardState = stampMove({ fen: fen }, side);
-            const stateKey = 'chess_game_' + config.instance;
-            BS.BanterScene.GetInstance().SetPublicSpaceProps({ [stateKey]: JSON.stringify(boardState) });
+            const currentData = state.lastSpaceState || {};
+            const boardState = stampMove({
+                ...currentData,
+                fen: fen,
+                lastActionTime: Date.now()
+            }, side);
+            saveState(boardState);
 
-            // Optimistically sync the board for the local player, as the space-state-changed
-            // event might not fire reliably for the client that initiated the change.
             console.log("Optimistically syncing local board after move.");
             syncBoard();
-
-            // The syncBoard() call is implicit via the event listener now, but we can clear selection optimistically.
             clearSelection();
+            updateModernUI();
         } else {
             clearSelection();
-            if (game.chess.get(squareId)) handleSquareClick(squareId); // Retry selection
+            if (game.chess.get(squareId) && game.chess.get(squareId).color === side) {
+                handleSquareClick(squareId); // Retry selection
+            }
         }
     }
 
@@ -1169,6 +1644,8 @@
                 if (val) {
                     try {
                         const gameState = JSON.parse(val);
+                        state.gameState = gameState;
+                        state.lastSpaceState = gameState;
                         loadLastMove(gameState);
                         console.log("Syncing game state from space:", gameState);
                         if (gameState.fen === 'reset') {
@@ -1179,6 +1656,7 @@
                             chessGame.loadFen(gameState.fen);
                             syncBoard();
                         }
+                        updateModernUI();
                     } catch (err) {
                         console.error("Error parsing game state:", err);
                     }
@@ -1186,21 +1664,60 @@
             }
         });
 
+        // Free seats if a seated player leaves the space
+        scene.On("user-left", (e) => {
+            const user = e && e.detail;
+            const leftUid = user && (user.uid ?? (user.user && user.user.uid));
+            if (!leftUid) return;
+            // Only one of the players still here writes the change: the one with the lowest uid.
+            const me = localUid();
+            if (!me || me === String(leftUid)) return;
+            const remaining = Object.keys(scene.users || {}).map(String).filter(u => u !== String(leftUid));
+            if (!remaining.includes(me)) remaining.push(me);
+            remaining.sort();
+            if (remaining[0] !== me) { updateModernUI(); return; }
+            const white = state.gameState?.whitePlayer;
+            const black = state.gameState?.blackPlayer;
+            let changed = false;
+            let newWhite = white;
+            let newBlack = black;
+            if (white && String(white.uid) === String(leftUid)) {
+                newWhite = null;
+                changed = true;
+            }
+            if (black && String(black.uid) === String(leftUid)) {
+                newBlack = null;
+                changed = true;
+            }
+            if (changed) {
+                updateSeats(newWhite, newBlack);
+            }
+        });
+
+        scene.On("user-joined", () => {
+            updateModernUI();
+        });
+
         // Initial load
         const initialVal = await getSpaceStateValue(stateKey);
         if (initialVal) {
             try {
                 const gameState = JSON.parse(initialVal);
+                state.gameState = gameState;
+                state.lastSpaceState = gameState;
                 loadLastMove(gameState);
                 console.log("Loaded initial game state:", gameState);
-                if (gameState.fen) {
+                if (gameState.fen === 'reset') {
+                    chessGame.reset();
+                } else if (gameState.fen) {
                     chessGame.loadFen(gameState.fen);
-                    syncBoard();
                 }
             } catch (err) {
                 console.error("Error parsing initial game state:", err);
             }
         }
+        await syncBoard();
+        updateModernUI();
         startSounds();
         
         // The board is now synced only through space state changes.
@@ -1223,14 +1740,32 @@
         config.boardPosition = new BS.Vector3(...config.boardPosition);
         config.boardRotation = new BS.Vector3(...config.boardRotation);
         config.boardScale = new BS.Vector3(...config.boardScale);
-        config.resetPosition = new BS.Vector3(...config.resetPosition);
-        config.resetRotation = new BS.Vector3(...config.resetRotation);
-        config.resetScale = new BS.Vector3(...config.resetScale);
+        config.scoreboardPosition = new BS.Vector3(...config.scoreboardPosition);
+        config.scoreboardRotation = new BS.Vector3(...config.scoreboardRotation);
+        config.scoreboardScale = new BS.Vector3(...config.scoreboardScale);
 
         // Note: Floor creation removed as per user request. 
         // Host spaces should provide their own ground/environment.
         await initializeBoard();
     };
+
+    window.__chessDebug = () => ({
+        fen: chessGame ? chessGame.getFen() : null,
+        piecesCount: state.pieces ? Object.keys(state.pieces).length : 0,
+        piecesKeys: state.pieces ? Object.keys(state.pieces) : null,
+        tilesCount: state.tiles ? Object.keys(state.tiles).length : 0,
+        renderStatus,
+        lastRenderError,
+        piecesRoot: !!state.piecesRoot,
+        boardRoot: !!state.boardRoot,
+        listenersSetup: state.listenersSetup,
+        hasUI: !!(state.ui && state.ui.obj),
+        uiPos: state.ui ? state.ui.savedPos : null,
+        uiScale: state.ui ? state.ui.savedScale : null,
+        isCulled: isCulled,
+        whitePlayer: state.gameState?.whitePlayer,
+        blackPlayer: state.gameState?.blackPlayer
+    });
 
     // --- Check for BS availability ---
     if (window.BS) {

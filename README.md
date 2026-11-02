@@ -9,7 +9,9 @@ To try it, open <https://chess.firer.at> in Altspace or Banter.
 ## Features
 
 - Full chess rules, with legal move checking
-- Reset button
+- A floating panel showing whose turn it is, with seats, Reset and Mute
+- Seat locking: claim White or Black so only you can move that side. While a game is under way, only its seated players can reset it (or anyone, once a seat is left idle or empty)
+- Switches itself off when you are far away, so it costs nothing elsewhere in the world
 - Several independent boards in one world
 - Lit or unlit materials
 
@@ -20,7 +22,7 @@ In a Creator SDK world, add an empty GameObject at the origin, click **Add Compo
 ```html
 <!-- snippet section -->
 <bs-snippet name="chess" title="Chess"
-  description="Synced multiplayer chess board with a reset button."
+  description="Synced multiplayer chess board with seat locking."
   script="https://chess.firer.at/snippet.js"
   room=""
   position="0 1 2"
@@ -29,18 +31,14 @@ In a Creator SDK world, add an empty GameObject at the origin, click **Add Compo
   lit="true"
   add-lights="false"
   turn-cooldown="5"
+  lock-timeout="90"
+  cull-distance="20"
   sound-volume="0.4"
   sound-near="2.5"
   sound-far="10"
   hide-ui="false"
   hide-board="false"
   pieces-opacity="1"
-  reset-position="0 0 2.5"
-  reset-rotation="0 0 0"
-  reset-scale="1"
-  mute-position="0 0 0"
-  mute-rotation="0 0 0"
-  mute-scale="1"
   scoreboard-position="0 0 0"
   scoreboard-rotation="0 0 0"
   scoreboard-scale="1">
@@ -80,16 +78,12 @@ Settings can also go in the URL, as in older setups: `https://chess.firer.at/Che
 | `boardPosition` | `position`, `board-position` | `0 1.1 -2` | Board position (x y z). |
 | `boardRotation` | `rotation`, `board-rotation` | `0 0 0` | Board rotation in degrees (x y z). |
 | `boardScale` | `scale`, `board-scale` | `1` | Board scale: one number, or x y z. |
-| `resetPosition` | `reset-position` | `0 0 2.5` | Reset button position, relative to the board. |
-| `resetRotation` | `reset-rotation` | `0 0 0` | Reset button rotation, relative to the board. |
-| `resetScale` | `reset-scale` | `1` | Reset button scale. |
-| `mutePosition` | `mute-position` | `0 0 0` | Where the MUTE button goes, relative to the board. `0 0 0` puts it beside the Reset button, attached to it so it moves with it. MUTE only turns the sounds off for you, and is remembered on your device. |
-| `muteRotation` | `mute-rotation` | `0 0 0` | Rotation of the MUTE button. |
-| `muteScale` | `mute-scale` | `1` | Scale of the MUTE button. |
-| `hideUI` | `hide-ui` | `false` | `true` makes the reset button invisible (it still works and its RESET label stays visible) and hides the turn display. |
-| `scoreboardPosition` | `scoreboard-position` | `0 0 0` | Position of the sign showing whose turn it is, relative to the board. |
-| `scoreboardRotation` | `scoreboard-rotation` | `0 0 0` | Turn sign rotation. |
-| `scoreboardScale` | `scoreboard-scale` | `1` | Turn sign scale. |
+| `hideUI` | `hide-ui` | `false` | `true` hides the UI panel (turn, seats, Reset, Mute). |
+| `scoreboardPosition` | `scoreboard-position`, `ui-position`, `panel-position` | `0 1 0` | Position of the UI panel, relative to the board centre. `0 0 0` uses the default. The panel turns to face each player. |
+| `scoreboardRotation` | `scoreboard-rotation`, `ui-rotation`, `panel-rotation` | `0 0 0` | UI panel rotation. |
+| `scoreboardScale` | `scoreboard-scale`, `ui-scale`, `panel-scale` | `1` | UI panel size: `1` is normal, `2` twice as big. It also grows with the board's `scale`. |
+| `lockTimeout` | `lock-timeout`, `seat-timeout`, `idle-timeout` | `90` | Seconds a seated player can leave their turn untouched before anyone can take their seat. A seat also frees up when its player leaves the space. `0` turns the timeout off. Unclaimed sides can be moved by anyone. |
+| `cullDistance` | `cull-distance`, `render-distance` | `20` | Metres from the board beyond which the game switches itself off for you (board, pieces and panel), and back on when you come within a metre less. Moves made meanwhile show up when you return. `0` keeps it always on. |
 | `turnCooldown` | `turn-cooldown` | `5` | Seconds after a move before the same person can move for the other side, so a double click or an eager player can't take the opponent's turn. Playing both sides alone still works after the wait. `0` turns it off. |
 | `volume` | `sound-volume` | `0.4` | Volume of the sound effects (moves, captures, wins, resets), from `0` to `1`, heard at full strength near the game. `0` turns them off. |
 | `soundNear` | `sound-near` | `2.5` | Distance in metres from the game within which the sounds play at full `sound-volume`. |
