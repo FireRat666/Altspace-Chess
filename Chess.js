@@ -910,41 +910,24 @@
     }
 
     // Turns the whole game off (board, pieces, UI panel) when the local player is far from it, and
-    // back on. The board is switched off with SetActive. The UI panel is destroyed and built again
-    // instead, because a BanterUI panel loses its contents when it is switched off and on.
+    // back on. The board is switched off with SetActive, and the root is shrunk to nothing, which
+    // hides the UI panel. The panel isn't removed and built again (the app doesn't free everything a
+    // deleted UI panel used, so that leaked memory each time), nor switched off (a BanterUI panel
+    // loses its contents when it is switched off and on).
     // While off, incoming moves are still tracked; the pieces are redrawn when it comes back on.
-    let uiBuilding = null;
     function setCulled(culled) {
         isCulled = culled;
         if (!state.boardRoot) return;
-        if (state.boardVisuals) {
-            try {
-                state.boardVisuals.SetActive(!culled);
-            } catch (e) {
-                console.warn("Chess: Could not switch the board on/off", e);
-            }
+        try {
+            if (state.boardVisuals) state.boardVisuals.SetActive(!culled);
+            state.boardRoot.GetComponent(BS.ComponentType.Transform).localScale = culled ? new BS.Vector3(0, 0, 0) : config.boardScale;
+        } catch (e) {
+            console.warn("Chess: Could not switch the board on/off", e);
         }
-        if (culled) {
-            destroyUI();
-        } else {
-            if (!state.ui && !uiBuilding && !config.hideUI) {
-                uiBuilding = buildModernUI()
-                    .catch(e => console.warn("Chess: Could not rebuild the UI", e))
-                    .finally(() => {
-                        uiBuilding = null;
-                        if (isCulled) destroyUI(); // went out of range while it was being built
-                    });
-            }
+        if (!culled) {
             syncBoard();
             updateModernUI();
         }
-    }
-
-    function destroyUI() {
-        if (!state.ui) return;
-        const obj = state.ui.obj;
-        state.ui = null;
-        try { obj.Destroy(); } catch (e) { console.warn("Chess: Could not remove the UI", e); }
     }
 
     async function createBanterObject(name, parent, posLocal, colorHex, geometryType, dims) {
